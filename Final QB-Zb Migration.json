@@ -1,0 +1,896 @@
+{
+  "name": "Final QB-Zb Migration",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -7088,
+        -160
+      ],
+      "id": "5002c1c0-9a19-4bea-a226-79ab37f884c7",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Validate Config4').first().json;\nconst plans = {\n  accounts: [['chartofaccounts','chartofaccounts']],\n  customers: [['contacts','contacts']],\n  vendors: [['contacts','contacts']],\n  items: [['chartofaccounts','chartofaccounts'],['items','items']],\n  invoices: [['chartofaccounts','chartofaccounts'],['contacts','contacts'],['items','items'],['invoices','invoices'],['settings/taxes','taxes']],\n  invoice_payments: [['chartofaccounts','chartofaccounts'],['contacts','contacts'],['invoices','invoices'],['customerpayments','customerpayments']],\n  bills: [['chartofaccounts','chartofaccounts'],['contacts','contacts'],['items','items'],['bills','bills'],['settings/taxes','taxes']],\n  bill_payments: [['chartofaccounts','chartofaccounts'],['contacts','contacts'],['bills','bills'],['vendorpayments','vendorpayments']],\n  expenses: [['chartofaccounts','chartofaccounts'],['contacts','contacts'],['items','items'],['expenses','expenses'],['settings/taxes','taxes']],\n  expense_refunds: [['chartofaccounts','chartofaccounts'],['contacts','contacts'],['expenses','expenses'],['banktransactions','banktransactions']],\n  credit_card_repayments: [['chartofaccounts','chartofaccounts'],['expenses','expenses'],['banktransactions','banktransactions']],\n  bank_transactions: [['chartofaccounts','chartofaccounts'],['customerpayments','customerpayments'],['vendorpayments','vendorpayments'],['expenses','expenses'],['banktransactions','banktransactions']],\n  journals: [['chartofaccounts','chartofaccounts'],['contacts','contacts'],['journals','journals']],\n  overall_audit: [['chartofaccounts','chartofaccounts'],['contacts','contacts'],['items','items'],['invoices','invoices'],['customerpayments','customerpayments'],['bills','bills'],['vendorpayments','vendorpayments'],['expenses','expenses'],['banktransactions','banktransactions'],['journals','journals'],['creditnotes','creditnotes'],['vendorcredits','vendorcredits'],['salesreceipts','salesreceipts']]\n};\nconst selected = plans[config.phase] || [];\nif (!selected.length) throw new Error('No Zoho snapshot plan for phase: ' + config.phase);\n\n// Master snapshots are required in every phase so all four master ID maps can\n// be rebuilt without manually maintaining hundreds of overrides.\nconst masterSnapshots = [\n  ['chartofaccounts', 'chartofaccounts'],\n  ['contacts', 'contacts'],\n  ['items', 'items']\n];\nconst combined = [];\nconst seen = new Set();\nfor (const pair of [...masterSnapshots, ...selected]) {\n  const identity = pair[0] + '|' + pair[1];\n  if (seen.has(identity)) continue;\n  seen.add(identity);\n  combined.push(pair);\n}\n\nreturn combined.map(([path,key]) => ({ json: {\n  snapshot_key: key,\n  url: config.zoho_api_base + '/' + path,\n  organization_id: config.zoho_organization_id,\n  page_size: config.zoho_page_size\n}}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5296,
+        -16
+      ],
+      "id": "4df42e09-08ca-4082-af75-81f1d26f2d2b",
+      "name": "Build Phase Snapshot Jobs3"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "organization_id",
+              "value": "={{ $json.organization_id }}"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            },
+            {
+              "name": "per_page",
+              "value": "={{ $json.page_size }}"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "page",
+                    "value": "={{ $pageCount + 1 }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $response.body.page_context?.has_more_page === false }}",
+              "limitPagesFetched": true,
+              "maxRequests": 50,
+              "requestInterval": 1000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -5072,
+        -16
+      ],
+      "id": "7e43180b-7488-4972-9242-1c1d8963be44",
+      "name": "Zoho - Phase Snapshots3",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "4S6a9PViGwpYSjQB",
+          "name": "QB - ZB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Validate Config4').first().json;\nconst all = $('Strict Payload Builder4').all().map(i => i.json);\nconst quarantined = all.filter(row => row.outcome === 'quarantine');\nconst readyCount = all.filter(row => row.outcome === 'ready').length;\nconst dryRun = config.dry_run === true || String(config.dry_run).toLowerCase() === 'true';\nconst strictBlocked = Boolean(config.stop_on_any_unmapped_value && quarantined.length > 0);\nconst maxLive = Math.max(1, Number(config.max_live_records_per_run || 1000));\nconst quotaBlocked = !dryRun && readyCount > maxLive;\nconst liveBlocked = strictBlocked || quotaBlocked;\nreturn $input.all().map(item => ({ json: {\n  ...item.json,\n  dry_run: dryRun,\n  live_blocked: liveBlocked,\n  quota_blocked: quotaBlocked,\n  ready_count: readyCount,\n  max_live_records_per_run: maxLive,\n  route_to_summary: dryRun || liveBlocked\n}}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3952,
+        -272
+      ],
+      "id": "e46dfade-b2b3-4c04-8231-d87083d5e694",
+      "name": "Attach Run Mode3"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -3504,
+        -176
+      ],
+      "id": "3e83568d-7e8f-4e6e-bcfa-a93aacdca8fe",
+      "name": "Zoho Write Rate Limit Loop5"
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.max(1, Number($('Validate Config4').first().json.zoho_write_delay_seconds || 1)) }}"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -2832,
+        -176
+      ],
+      "webhookId": "da95a191-356b-4aca-a4e7-9be2c45473dd",
+      "id": "279d2f04-9066-4f61-8639-545550e2af88",
+      "name": "Wait 1 Second - Zoho Limit5"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Normalize Zoho Result4').all().map(item => item.json);\nconst counts = rows.reduce((acc, row) => {\n  acc[row.outcome || 'unknown'] = (acc[row.outcome || 'unknown'] || 0) + 1;\n  return acc;\n}, {});\nreturn [{ json: {\n  phase: rows[0]?.phase || 'unknown',\n  counts,\n  total: rows.length,\n  failed_sample: rows.filter(row => row.outcome === 'failed').slice(0, 50)\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3280,
+        -176
+      ],
+      "id": "8d1e8872-35ae-42e1-9eb2-4bd9a0db9958",
+      "name": "Live Migration Summary5"
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = { ...$json };\nconst errors = [];\nconst phases = [\"accounts\",\"customers\",\"vendors\",\"items\",\"invoices\",\"invoice_payments\",\"bills\",\"bill_payments\",\"expenses\",\"expense_refunds\",\"credit_card_repayments\",\"bank_transactions\",\"journals\",\"overall_audit\"];\nconst modes = ['all','year','cutover'];\nif (!c.qbo_realm_id || c.qbo_realm_id.startsWith('REPLACE_')) errors.push('Set qbo_realm_id');\nif (!c.qbo_client_id || c.qbo_client_id.startsWith('PASTE_')) errors.push('Set qbo_client_id');\nif (!c.qbo_client_secret || c.qbo_client_secret.startsWith('PASTE_')) errors.push('Set qbo_client_secret');\nif (!c.qbo_refresh_token || c.qbo_refresh_token.startsWith('PASTE_')) errors.push('Set qbo_refresh_token');\nif (!c.zoho_organization_id || c.zoho_organization_id.startsWith('REPLACE_')) errors.push('Set exactly one zoho_organization_id');\nif (!phases.includes(c.phase)) errors.push('Invalid phase');\nif (!modes.includes(c.migration_mode)) errors.push('Invalid migration_mode');\nif (c.migration_mode === 'year') {\n  const y = Number(c.year);\n  if (!Number.isInteger(y) || y < 1900 || y > 2200) errors.push('Set a valid four-digit year');\n  else {\n    c.start_date = String(y) + '-01-01';\n    c.end_date = String(y) + '-12-31';\n  }\n}\nif (c.migration_mode === 'cutover') c.start_date = c.cutover_date;\nif (c.migration_mode !== 'all' && (!/^\\d{4}-\\d{2}-\\d{2}$/.test(c.start_date) || !/^\\d{4}-\\d{2}-\\d{2}$/.test(c.end_date))) errors.push('Use YYYY-MM-DD dates');\nif (c.migration_mode !== 'all' && c.start_date > c.end_date) errors.push('start_date must be <= end_date');\nif (c.phase === 'overall_audit' && c.dry_run !== true) errors.push('overall_audit must use dry_run=true');\nif (!c.dry_run && Object.values(c.custom_field_ids || {}).some(v => !v)) errors.push('Live mode requires all QBO ID custom-field IDs');\nif (c.repair_existing_only !== true && c.repair_existing_only !== false) errors.push('repair_existing_only must be true or false');\nif (c.strict_phase_ownership !== true) errors.push('strict_phase_ownership must be true');\nif (Number(c.zoho_write_delay_seconds || 0) < 1) errors.push('zoho_write_delay_seconds must be at least 1');\nreturn [{ json: { ...c, config_valid: errors.length === 0, config_errors: errors } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -6640,
+        -160
+      ],
+      "id": "4a973959-3ef5-4289-b0e0-e07787bc8025",
+      "name": "Validate Config4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "valid",
+              "leftValue": "={{ $json.config_valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -6416,
+        -160
+      ],
+      "id": "db983420-de21-4c33-b071-39cb06eee601",
+      "name": "Config Valid?4"
+    },
+    {
+      "parameters": {
+        "jsCode": "throw new Error('Migration config invalid: ' + ($json.config_errors || []).join('; '));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -6224,
+        16
+      ],
+      "id": "45e7a0c1-d76d-4cf5-8873-de89570edf27",
+      "name": "Config Error - STOP4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const session = $json;\nconst accessToken = String(session.qbo_access_token || '').trim();\nif (!accessToken) throw new Error('QBO access token missing. Run from Manual Trigger.');\n\nconst config = { ...session };\ndelete config.qbo_access_token;\ndelete config.qbo_refresh_token;\ndelete config.qbo_refresh_token_next;\n\nconst phaseEntities = {\n  accounts: ['Account'],\n  customers: ['Customer'],\n  vendors: ['Vendor'],\n  items: ['Item'],\n  invoices: ['Invoice'],\n  invoice_payments: ['Payment'],\n  bills: ['Bill'],\n  bill_payments: ['BillPayment'],\n  expenses: ['Purchase'],\n  expense_refunds: ['Deposit', 'Purchase'],\n  credit_card_repayments: ['Transfer', 'Purchase', 'Deposit'],\n  bank_transactions: ['Transfer', 'Deposit', 'Purchase'],\n  journals: ['JournalEntry'],\n  overall_audit: ['Account','Customer','Vendor','Item','Invoice','Payment','Bill','BillPayment','Purchase','Transfer','Deposit','JournalEntry','CreditMemo','VendorCredit','SalesReceipt','RefundReceipt']\n};\n\nconst masters = new Set(['Account', 'Customer', 'Vendor', 'Item']);\nconst dateWhere = config.migration_mode === 'all'\n  ? ''\n  : ` WHERE TxnDate >= '${config.start_date}' AND TxnDate <= '${config.end_date}'`;\n\n// Always fetch the four master entities once. Attach Strict ID Maps uses\n// them to build complete Account/Customer/Vendor/Item maps for every phase.\nconst mappingMasters = ['Account', 'Customer', 'Vendor', 'Item'];\nconst selectedEntities = [...new Set([\n  ...mappingMasters,\n  ...(phaseEntities[config.phase] || [])\n])];\n\nreturn selectedEntities.map((entity) => ({\n  json: {\n    config,\n    qbo_access_token: accessToken,\n    source_entity: entity,\n    query_prefix: `SELECT * FROM ${entity}${masters.has(entity) ? '' : dateWhere}`\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5520,
+        -352
+      ],
+      "id": "d585c26b-8a1d-4f30-9317-0c3f24ed431d",
+      "name": "Build QBO Jobs4"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.config.qbo_api_base + '/' + $json.config.qbo_realm_id + '/query' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.query_prefix + ' STARTPOSITION 1 MAXRESULTS ' + $json.config.qbo_page_size }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.qbo_access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 500
+            }
+          },
+          "pagination": {
+            "pagination": {
+              "parameters": {
+                "parameters": [
+                  {
+                    "name": "query",
+                    "value": "={{ $json.query_prefix + ' STARTPOSITION ' + (($pageCount * $json.config.qbo_page_size) + 1) + ' MAXRESULTS ' + $json.config.qbo_page_size }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ Number($response.body.QueryResponse?.maxResults || 0) < Number($json.config.qbo_page_size) }}",
+              "limitPagesFetched": true,
+              "maxRequests": 1000,
+              "requestInterval": 250
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -5296,
+        -352
+      ],
+      "id": "e77c0c98-afd9-4c1e-b786-a15fa978025a",
+      "name": "QBO - Paginated Query4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawConfig = $('Validate Config4').first().json;\nconst config = { ...rawConfig };\ndelete config.qbo_refresh_token;\n\nconst ignored = new Set(['startPosition','maxResults','totalCount']);\nconst out = [];\nfor (const page of $input.all()) {\n  const qr = page.json.QueryResponse || {};\n  for (const [entity, records] of Object.entries(qr)) {\n    if (ignored.has(entity) || !Array.isArray(records)) continue;\n    for (const source of records) out.push({ json: { config, source_entity: entity, source } });\n  }\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5072,
+        -352
+      ],
+      "id": "64acdb34-6508-43c9-89c5-39223e13a223",
+      "name": "Flatten QBO Pages4"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -4848,
+        -176
+      ],
+      "id": "b96e786d-13b5-4794-a6e5-f4e77255d42a",
+      "name": "Wait for Source + Target Snapshots4"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Build strict QuickBooks-ID -> Zoho-ID maps and a complete idempotency snapshot.\n * Mode: Run Once for All Items\n */\nconst incoming = $input.all().map((item) => item?.json || {});\nconst clean = (value) => String(value ?? '').trim();\n\nconst sourceRows = incoming.filter((row) =>\n  row?.source_entity && row?.source && typeof row.source === 'object' && !Array.isArray(row.source)\n);\n\nif (!sourceRows.length) {\n  return [{ json: {\n    outcome: 'quarantine',\n    source_entity: 'Unknown',\n    source_id: '',\n    error_code: 'NO_QBO_SOURCE_ROWS',\n    error_message: 'No QuickBooks records reached Attach Strict ID Maps1. Run the complete workflow from Manual Trigger.',\n    received_item_count: incoming.length,\n    occurred_at: new Date().toISOString()\n  }}];\n}\n\nconst config = sourceRows.find((row) => row.config)?.config || {};\nconst pages = (...keys) => {\n  const records = [];\n  for (const row of incoming) {\n    for (const key of keys) {\n      if (Array.isArray(row?.[key])) records.push(...row[key]);\n      if (Array.isArray(row?.body?.[key])) records.push(...row.body[key]);\n    }\n  }\n  return records.filter((record) => record && typeof record === 'object');\n};\n\nconst accounts = pages('chartofaccounts', 'accounts');\nconst contacts = pages('contacts');\nconst items = pages('items');\nconst invoices = pages('invoices');\nconst bills = pages('bills');\nconst customerPayments = pages('customerpayments', 'customer_payments');\nconst vendorPayments = pages('vendorpayments', 'vendor_payments');\nconst taxes = pages('taxes');\nconst expenses = pages('expenses');\nconst bankTransactions = pages('banktransactions', 'bank_transactions');\nconst journals = pages('journals');\nconst creditNotes = pages('creditnotes', 'credit_notes');\nconst vendorCredits = pages('vendorcredits', 'vendor_credits');\nconst salesReceipts = pages('salesreceipts', 'sales_receipts');\n\nconst fieldValue = (record, wantedFieldId) => {\n  const wanted = clean(wantedFieldId);\n  if (!record || !wanted) return '';\n  const fields = Array.isArray(record.custom_fields) ? [...record.custom_fields] : [];\n  if (record.custom_field_hash && typeof record.custom_field_hash === 'object') {\n    for (const [api_name, value] of Object.entries(record.custom_field_hash)) fields.push({ api_name, value });\n  }\n  const match = fields.find((field) => [\n    field?.customfield_id, field?.custom_field_id, field?.field_id, field?.api_name\n  ].map(clean).includes(wanted));\n  return clean(match?.value);\n};\n\nconst applyOverrides = (target, overrides) => {\n  for (const [sourceId, targetId] of Object.entries(overrides || {})) {\n    if (clean(sourceId) && clean(targetId)) target[clean(sourceId)] = clean(targetId);\n  }\n};\n\nconst mapByField = (records, fieldId, idKey) => {\n  const result = {};\n  for (const record of records) {\n    const sourceId = fieldValue(record, fieldId);\n    const targetId = clean(record?.[idKey]);\n    if (sourceId && targetId) result[sourceId] = targetId;\n  }\n  return result;\n};\n\nconst findQboKeys = (value) => {\n  const keys = [];\n  const text = clean(value);\n  const expression = /QBO:([A-Za-z_]+):([A-Za-z0-9._-]+)/g;\n  let match;\n  while ((match = expression.exec(text)) !== null) keys.push('QBO:' + match[1] + ':' + match[2]);\n  return keys;\n};\n\nconst accountByQbo = mapByField(accounts, config.custom_field_ids?.account_qbo_id, 'account_id');\nfor (const account of accounts) {\n  const targetId = clean(account.account_id);\n  const descriptionMatch = clean(account.description).match(/QBO Account ID:\\s*([A-Za-z0-9._-]+)/i);\n  const sourceId = fieldValue(account, config.custom_field_ids?.account_qbo_id) || clean(descriptionMatch?.[1]);\n  if (sourceId && targetId) accountByQbo[sourceId] = targetId;\n}\napplyOverrides(accountByQbo, config.approved_account_overrides);\n\nconst normalizeName = (value) => clean(value).toLowerCase().replace(/\\s+/g, ' ');\nconst expectedAccountName = (qb) => {\n  const qualified = clean(qb?.FullyQualifiedName);\n  return qb?.SubAccount && config.use_qualified_account_names && qualified\n    ? qualified.replace(/\\s*:\\s*/g, ' - ')\n    : clean(qb?.Name);\n};\n\nconst qboAccountTypeToZoho = (qb) => {\n  if (clean(qb?.AccountType) === 'Bank') {\n    return clean(qb?.AccountSubType) === 'CashOnHand' ? 'cash' : 'bank';\n  }\n  if (\n    clean(qb?.AccountType) === 'Other Current Asset' &&\n    clean(qb?.AccountSubType) === 'UndepositedFunds'\n  ) return 'cash';\n  const types = {\n    'Accounts Receivable': 'accounts_receivable',\n    'Other Current Asset': 'other_current_asset',\n    'Fixed Asset': 'fixed_asset',\n    'Other Asset': 'other_asset',\n    'Accounts Payable': 'accounts_payable',\n    'Credit Card': 'credit_card',\n    'Other Current Liability': 'other_current_liability',\n    'Long Term Liability': 'long_term_liability',\n    'Equity': 'equity',\n    'Income': 'income',\n    'Other Income': 'other_income',\n    'Expense': 'expense',\n    'Cost of Goods Sold': 'cost_of_goods_sold',\n    'Other Expense': 'other_expense'\n  };\n  return clean(types[clean(qb?.AccountType)]).toLowerCase();\n};\n\n// Fill missing account IDs by exact unique name + compatible account type.\n// Parent IDs are also checked for subaccounts. Existing custom-field,\n// description and approved override mappings always win.\nfor (let pass = 0; pass < 20; pass++) {\n  let changed = false;\n  for (const row of sourceRows.filter((candidate) => candidate.source_entity === 'Account')) {\n    const qb = row.source || {};\n    const sourceId = clean(qb.Id);\n    if (!sourceId || accountByQbo[sourceId]) continue;\n\n    const expectedName = normalizeName(expectedAccountName(qb));\n    const expectedType = qboAccountTypeToZoho(qb);\n    const parentId = qb.SubAccount\n      ? clean(accountByQbo[clean(qb.ParentRef?.value)])\n      : '';\n    if (qb.SubAccount && !parentId) continue;\n\n    const candidates = accounts.filter((account) => {\n      const nameMatches = normalizeName(account.account_name) === expectedName;\n      const targetType = clean(account.account_type).toLowerCase();\n      const typeMatches = !expectedType || targetType === expectedType;\n      const parentMatches = qb.SubAccount\n        ? clean(account.parent_account_id) === parentId\n        : !clean(account.parent_account_id);\n      return nameMatches && typeMatches && parentMatches;\n    });\n\n    if (candidates.length === 1 && clean(candidates[0].account_id)) {\n      accountByQbo[sourceId] = clean(candidates[0].account_id);\n      changed = true;\n    }\n  }\n  if (!changed) break;\n}\n\nconst customerByQbo = {};\nconst vendorByQbo = {};\nfor (const contact of contacts) {\n  const targetId = clean(contact.contact_id);\n  if (!targetId) continue;\n  const candidates = [fieldValue(contact, config.custom_field_ids?.contact_qbo_id)];\n  for (const field of [contact.reference_number, contact.notes, contact.description]) {\n    candidates.push(...findQboKeys(field).map((key) => key.replace(/^QBO:/, '')));\n  }\n  for (const candidate of candidates.filter(Boolean)) {\n    if (candidate.startsWith('Customer:')) customerByQbo[clean(candidate.slice(9))] = targetId;\n    else if (candidate.startsWith('Vendor:')) vendorByQbo[clean(candidate.slice(7))] = targetId;\n    else {\n      const type = clean(contact.contact_type).toLowerCase();\n      if (type === 'customer' || type === 'both') customerByQbo[clean(candidate)] = targetId;\n      if (type === 'vendor' || type === 'both') vendorByQbo[clean(candidate)] = targetId;\n    }\n  }\n}\napplyOverrides(customerByQbo, config.approved_customer_overrides);\napplyOverrides(vendorByQbo, config.approved_vendor_overrides);\n\nconst contactNames = (record) => [\n  record?.contact_name,\n  record?.display_name,\n  record?.company_name\n].map(normalizeName).filter(Boolean);\n\nconst sourceContactName = (qb) => normalizeName(\n  qb?.DisplayName || qb?.FullyQualifiedName || qb?.CompanyName ||\n  [qb?.GivenName, qb?.MiddleName, qb?.FamilyName].filter(Boolean).join(' ')\n);\n\nfor (const row of sourceRows) {\n  const entity = clean(row.source_entity);\n  if (entity !== 'Customer' && entity !== 'Vendor') continue;\n  const qb = row.source || {};\n  const sourceId = clean(qb.Id);\n  const targetMap = entity === 'Customer' ? customerByQbo : vendorByQbo;\n  if (!sourceId || targetMap[sourceId]) continue;\n\n  const wantedName = sourceContactName(qb);\n  if (!wantedName) continue;\n  const candidates = contacts.filter((contact) => {\n    const contactType = clean(contact.contact_type).toLowerCase();\n    const typeMatches = entity === 'Customer'\n      ? ['customer', 'both'].includes(contactType)\n      : ['vendor', 'both'].includes(contactType);\n    return typeMatches && contactNames(contact).includes(wantedName);\n  });\n  if (candidates.length === 1 && clean(candidates[0].contact_id)) {\n    targetMap[sourceId] = clean(candidates[0].contact_id);\n  }\n}\n\nconst itemByQbo = mapByField(items, config.custom_field_ids?.item_qbo_id, 'item_id');\napplyOverrides(itemByQbo, config.approved_item_overrides);\n\n// Fill missing item IDs only when an exact normalized name has one target.\nfor (const row of sourceRows.filter((candidate) => candidate.source_entity === 'Item')) {\n  const qb = row.source || {};\n  const sourceId = clean(qb.Id);\n  if (!sourceId || itemByQbo[sourceId]) continue;\n  const wantedName = normalizeName(qb.Name || qb.FullyQualifiedName);\n  if (!wantedName) continue;\n  const candidates = items.filter((item) => normalizeName(item.item_name) === wantedName);\n  if (candidates.length === 1 && clean(candidates[0].item_id)) {\n    itemByQbo[sourceId] = clean(candidates[0].item_id);\n  }\n}\nconst invoiceByQbo = mapByField(invoices, config.custom_field_ids?.invoice_qbo_id, 'invoice_id');\nconst billByQbo = mapByField(bills, config.custom_field_ids?.bill_qbo_id, 'bill_id');\napplyOverrides(invoiceByQbo, config.approved_invoice_overrides);\napplyOverrides(billByQbo, config.approved_bill_overrides);\n\nconst existing = {};\nconst existingModule = {};\nconst addMap = (entity, map) => {\n  for (const [sourceId, targetId] of Object.entries(map || {})) {\n    if (clean(sourceId) && clean(targetId)) existing['QBO:' + entity + ':' + sourceId] = clean(targetId);\n  }\n};\naddMap('Account', accountByQbo);\naddMap('Customer', customerByQbo);\naddMap('Vendor', vendorByQbo);\naddMap('Item', itemByQbo);\naddMap('Invoice', invoiceByQbo);\naddMap('Bill', billByQbo);\n\nconst targetIdKeys = [\n  'account_id', 'contact_id', 'item_id', 'invoice_id', 'bill_id', 'payment_id',\n  'vendorpayment_id', 'vendor_payment_id', 'expense_id', 'bank_transaction_id',\n  'transaction_id', 'journal_id', 'creditnote_id', 'vendor_credit_id', 'sales_receipt_id'\n];\n\nconst targetGroups = [\n  ['invoices', invoices], ['bills', bills],\n  ['customerpayments', customerPayments], ['vendorpayments', vendorPayments],\n  ['expenses', expenses], ['banktransactions', bankTransactions], ['journals', journals],\n  ['creditnotes', creditNotes], ['vendorcredits', vendorCredits], ['salesreceipts', salesReceipts]\n];\n\nfor (const [moduleName, records] of targetGroups) {\n  for (const record of records) {\n    const targetId = targetIdKeys.map((key) => clean(record?.[key])).find(Boolean) || '';\n    if (!targetId) continue;\n    const searchable = [\n      record.reference_number, record.notes, record.description, record.receipt_number,\n      record.invoice_number, record.bill_number, record.vendor_credit_number, record.creditnote_number\n    ];\n    for (const value of searchable) {\n      for (const key of findQboKeys(value)) {\n        existing[key] = targetId;\n        existingModule[key] = moduleName;\n      }\n    }\n  }\n}\n\nfor (const invoice of invoices) {\n  for (const key of findQboKeys(invoice.reference_number)) {\n    if (key.startsWith('QBO:Invoice:') && clean(invoice.invoice_id)) {\n      const sourceId = key.slice('QBO:Invoice:'.length);\n      invoiceByQbo[sourceId] = clean(invoice.invoice_id);\n      existing[key] = clean(invoice.invoice_id);\n    }\n  }\n}\nfor (const bill of bills) {\n  for (const key of findQboKeys(bill.reference_number)) {\n    if (key.startsWith('QBO:Bill:') && clean(bill.bill_id)) {\n      const sourceId = key.slice('QBO:Bill:'.length);\n      billByQbo[sourceId] = clean(bill.bill_id);\n      existing[key] = clean(bill.bill_id);\n    }\n  }\n}\n\nconst accountRecordById = Object.fromEntries(accounts.map((account) => [clean(account.account_id), account]));\nconst accountMeta = {};\nfor (const [sourceId, targetId] of Object.entries(accountByQbo)) {\n  const account = accountRecordById[clean(targetId)];\n  if (account) accountMeta[sourceId] = {\n    zoho_account_id: clean(targetId),\n    zoho_account_name: clean(account.account_name),\n    zoho_account_type: clean(account.account_type)\n  };\n}\n\nconst filteredSourceRows = sourceRows.filter((row) => {\n  if (row.source_entity !== 'Account') return true;\n  const qualified = clean(row.source?.FullyQualifiedName);\n  const depth = qualified ? qualified.split(':').length - 1 : 0;\n  return depth === Number(config.account_depth || 0);\n});\n\nreturn [{ json: {\n  bundle_version: 2,\n  config,\n  source_rows: filteredSourceRows,\n  maps: {\n    account_by_qbo_id: accountByQbo,\n    account_meta_by_qbo_id: accountMeta,\n    customer_by_qbo_id: customerByQbo,\n    vendor_by_qbo_id: vendorByQbo,\n    item_by_qbo_id: itemByQbo,\n    invoice_by_qbo_id: invoiceByQbo,\n    bill_by_qbo_id: billByQbo,\n    existing_by_source_key: existing,\n    existing_module_by_source_key: existingModule\n  },\n  map_snapshot_counts: {\n    accounts: accounts.length, contacts: contacts.length, items: items.length,\n    invoices: invoices.length, bills: bills.length, customer_payments: customerPayments.length,\n    vendor_payments: vendorPayments.length, taxes: taxes.length, expenses: expenses.length,\n    bank_transactions: bankTransactions.length, journals: journals.length,\n    credit_notes: creditNotes.length, vendor_credits: vendorCredits.length,\n    sales_receipts: salesReceipts.length, existing_source_keys: Object.keys(existing).length,\n    mapped_accounts: Object.keys(accountByQbo).length,\n    mapped_customers: Object.keys(customerByQbo).length,\n    mapped_vendors: Object.keys(vendorByQbo).length,\n    mapped_items: Object.keys(itemByQbo).length\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4624,
+        -176
+      ],
+      "id": "0dc53d3c-c173-4f6f-b122-ad4f49a9a5b2",
+      "name": "Attach Strict ID Maps4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const receivedInput = $input.all();\nconst input = [];\nconst upstreamQuarantines = [];\n\nfor (const receivedItem of receivedInput) {\n  const bundle = receivedItem?.json || {};\n\n  if (bundle.outcome === 'quarantine') {\n    upstreamQuarantines.push(receivedItem);\n    continue;\n  }\n\n  if (Array.isArray(bundle.source_rows)) {\n    for (const sourceRow of bundle.source_rows) {\n      if (!sourceRow?.source_entity || !sourceRow?.source) continue;\n\n      input.push({\n        json: {\n          ...sourceRow,\n          config: {\n            ...(bundle.config || {}),\n            ...(sourceRow.config || {}),\n          },\n          maps: bundle.maps || sourceRow.maps || {},\n        },\n      });\n    }\n    continue;\n  }\n\n  if (bundle.source_entity && bundle.source) {\n    input.push({\n      json: {\n        ...bundle,\n        config: { ...(bundle.config || {}) },\n        maps: bundle.maps || {},\n      },\n    });\n  }\n}\n\nif (!input.length) {\n  if (upstreamQuarantines.length) return upstreamQuarantines;\n  return [{\n    json: {\n      outcome: 'quarantine',\n      source_entity: 'Unknown',\n      source_id: '',\n      source_doc_number: '',\n      error_code: 'EMPTY_SOURCE_RECORDS',\n      error_message: 'No QBO source records reached Strict Payload Builder. Run the complete workflow from Manual Trigger.',\n      occurred_at: new Date().toISOString(),\n    },\n  }];\n}\nconst clean = (value) => String(value ?? '').trim();\nconst num = (value) => Number(value ?? 0);\nconst round = (value, precision = 2) => {\n  const factor = 10 ** precision;\n  return Math.round((num(value) + Number.EPSILON) * factor) / factor;\n};\n\nconst sourceKey = (entity, id) => `QBO:${entity}:${clean(id)}`;\n\nconst accountTypeMap = {\n  'Accounts Receivable': 'accounts_receivable',\n  'Other Current Asset': 'other_current_asset',\n  'Fixed Asset': 'fixed_asset',\n  'Other Asset': 'other_asset',\n  'Accounts Payable': 'accounts_payable',\n  'Credit Card': 'credit_card',\n  'Other Current Liability': 'other_current_liability',\n  'Long Term Liability': 'long_term_liability',\n  'Equity': 'equity',\n  'Income': 'income',\n  'Other Income': 'other_income',\n  'Expense': 'expense',\n  'Cost of Goods Sold': 'cost_of_goods_sold',\n  'Other Expense': 'other_expense'\n};\n\nconst mapAccountType = (qb) => {\n  if (qb.AccountType === 'Bank') {\n    return qb.AccountSubType === 'CashOnHand' ? 'cash' : 'bank';\n  }\n  return accountTypeMap[qb.AccountType] || null;\n};\n\nconst address = (value) => {\n  if (!value) return undefined;\n  const out = {\n    attention: clean(value.Note),\n    address: clean(value.Line1),\n    street2: clean(value.Line2),\n    city: clean(value.City),\n    state: clean(value.CountrySubDivisionCode),\n    zip: clean(value.PostalCode),\n    country: clean(value.Country)\n  };\n  return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== ''));\n};\n\nconst compact = (value) => {\n  if (Array.isArray(value)) return value.map(compact).filter((v) => v !== undefined);\n  if (value && typeof value === 'object') {\n    return Object.fromEntries(\n      Object.entries(value)\n        .map(([k, v]) => [k, compact(v)])\n        .filter(([, v]) => v !== undefined)\n    );\n  }\n  if (value === undefined || value === null || value === '') return undefined;\n  return value;\n};\n\nconst quarantine = (entity, qb, code, message, field, value, extra = {}) => ({\n  json: {\n    outcome: 'quarantine',\n    source_entity: entity,\n    source_id: clean(qb?.Id),\n    source_doc_number: clean(qb?.DocNumber),\n    error_code: code,\n    error_message: message,\n    unmapped_field: field || '',\n    unmapped_value: value === undefined ? '' : clean(value),\n    occurred_at: new Date().toISOString(),\n    ...extra\n  }\n});\n\nconst ready = (config, entity, qb, endpoint, payload) => ({\n  json: {\n    outcome: 'ready',\n    source_entity: entity,\n    source_id: clean(qb.Id),\n    source_doc_number: clean(qb.DocNumber),\n    source_key: sourceKey(entity, qb.Id),\n    endpoint: `${config.zoho_api_base || 'https://www.zohoapis.com/books/v3'}/${endpoint}`,\n    organization_id: clean(config.zoho_organization_id),\n    payload: compact(payload)\n  }\n});\n\nconst resolveId = (maps, mapName, ref) => {\n  const id = clean(ref?.value ?? ref);\n  return id ? clean(maps?.[mapName]?.[id]) : '';\n};\n\nconst customField = (id, value) => id ? [{ customfield_id: id, value: clean(value) }] : undefined;\n\nconst paymentMode = (qb) => {\n  const raw = clean(qb.PaymentMethodRef?.name || qb.PaymentType).toLowerCase();\n  if (raw.includes('cash')) return 'cash';\n  if (raw.includes('check') || raw.includes('cheque')) return 'check';\n  if (raw.includes('credit')) return 'creditcard';\n  if (raw.includes('bank') || raw.includes('ach') || raw.includes('wire')) return 'banktransfer';\n  return 'others';\n};\n\nconst taxIdFor = (config, taxCodeRef) => {\n  const qbTaxId = clean(taxCodeRef?.value);\n  if (!qbTaxId) return '';\n  return clean(config.tax_map?.[qbTaxId]);\n};\n\nfunction buildAccount(config, maps, qb) {\n  const mappedType = mapAccountType(qb);\n  if (!mappedType) {\n    return quarantine('Account', qb, 'UNSUPPORTED_ACCOUNT_TYPE',\n      'QuickBooks account type has no reviewed Zoho mapping.', 'AccountType', qb.AccountType);\n  }\n\n  const existing = maps.existing_by_source_key?.[sourceKey('Account', qb.Id)];\n  if (existing) {\n    return { json: { outcome: 'skipped_existing', source_entity: 'Account', source_id: clean(qb.Id), target_id: clean(existing) } };\n  }\n\n  let parentId;\n  if (qb.SubAccount) {\n    parentId = resolveId(maps, 'account_by_qbo_id', qb.ParentRef);\n    if (!parentId) {\n      return quarantine('Account', qb, 'PARENT_ACCOUNT_UNMAPPED',\n        'Create/map the parent account before this sub-account.', 'ParentRef', qb.ParentRef?.value);\n    }\n  }\n  const qualifiedAccountName = clean(qb.FullyQualifiedName);\n\n  const zohoAccountName =\n    qb.SubAccount &&\n    config.use_qualified_account_names &&\n    qualifiedAccountName\n      ? qualifiedAccountName.replace(/\\s*:\\s*/g, ' - ')\n      : clean(qb.Name);\n    \n  return ready(config, 'Account', qb, 'chartofaccounts', {\n    account_name: zohoAccountName,\n    account_code: clean(qb.AcctNum),\n    account_type: mappedType,\n    description: clean(qb.Description) || `Migrated from QuickBooks. QBO Account ID: ${qb.Id}`,\n    parent_account_id: parentId,\n    show_on_dashboard: mappedType === 'bank' || mappedType === 'cash' || mappedType === 'credit_card',\n    custom_fields: customField(config.custom_field_ids?.account_qbo_id, qb.Id)\n  });\n}\n\nfunction buildContact(config, maps, qb, entity) {\n  const name = clean(qb.DisplayName || qb.FullyQualifiedName || qb.CompanyName);\n  if (!name) {\n    return quarantine(entity, qb, 'CONTACT_NAME_MISSING', 'QuickBooks contact has no usable display name.', 'DisplayName', '');\n  }\n\n  const key = sourceKey(entity, qb.Id);\n  const existing = maps.existing_by_source_key?.[key];\n  if (existing) {\n    return { json: { outcome: 'skipped_existing', source_entity: entity, source_id: clean(qb.Id), target_id: clean(existing) } };\n  }\n\n  const parts = name.split(/\\s+/).filter(Boolean);\n  const firstName = clean(qb.GivenName) || parts[0] || (entity === 'Vendor' ? 'Vendor' : 'Customer');\n  const lastName = clean(qb.FamilyName) || (parts.length > 1 ? parts.at(-1) : '.');\n  const cfId = config.custom_field_ids?.contact_qbo_id;\n\n  return ready(config, entity, qb, 'contacts', {\n    contact_name: name,\n    company_name: clean(qb.CompanyName) || name,\n    contact_type: entity === 'Vendor' ? 'vendor' : 'customer',\n    customer_sub_type: entity === 'Customer' ? (qb.CompanyName ? 'business' : 'individual') : undefined,\n    vendor_sub_type: entity === 'Vendor' ? (qb.CompanyName ? 'business' : 'individual') : undefined,\n    website: clean(qb.WebAddr?.URI),\n    currency_code: clean(qb.CurrencyRef?.value),\n    notes: clean(qb.Notes) || `Migrated from QuickBooks. ${key}`,\n    billing_address: address(qb.BillAddr),\n    shipping_address: address(qb.ShipAddr),\n    contact_persons: [{\n      first_name: firstName,\n      last_name: lastName,\n      email: clean(qb.PrimaryEmailAddr?.Address),\n      phone: clean(qb.PrimaryPhone?.FreeFormNumber),\n      mobile: clean(qb.Mobile?.FreeFormNumber),\n      is_primary_contact: true\n    }],\n    custom_fields: customField(cfId, `${entity}:${qb.Id}`)\n  });\n}\n\nfunction buildItem(config, maps, qb) {\n  if (qb.Type === 'Category' || qb.Type === 'Group') {\n    return quarantine('Item', qb, 'UNSUPPORTED_ITEM_TYPE',\n      'QBO Category/Group requires an explicit Zoho item policy.', 'Type', qb.Type);\n  }\n\n  const incomeAccountId = resolveId(maps, 'account_by_qbo_id', qb.IncomeAccountRef);\n  if (!incomeAccountId) {\n    return quarantine('Item', qb, 'INCOME_ACCOUNT_UNMAPPED',\n      'Item income account is not mapped.', 'IncomeAccountRef', qb.IncomeAccountRef?.value);\n  }\n\n  const purchaseAccountId = qb.ExpenseAccountRef\n    ? resolveId(maps, 'account_by_qbo_id', qb.ExpenseAccountRef)\n    : '';\n  if (qb.ExpenseAccountRef && !purchaseAccountId) {\n    return quarantine('Item', qb, 'PURCHASE_ACCOUNT_UNMAPPED',\n      'Item purchase account is not mapped.', 'ExpenseAccountRef', qb.ExpenseAccountRef?.value);\n  }\n\n  const inventoryAccountId = qb.AssetAccountRef\n    ? resolveId(maps, 'account_by_qbo_id', qb.AssetAccountRef)\n    : '';\n  if (qb.AssetAccountRef && !inventoryAccountId) {\n    return quarantine('Item', qb, 'INVENTORY_ACCOUNT_UNMAPPED',\n      'Item inventory asset account is not mapped.', 'AssetAccountRef', qb.AssetAccountRef?.value);\n  }\n\n  const cfId = config.custom_field_ids?.item_qbo_id;\n  return ready(config, 'Item', qb, 'items', {\n    name: clean(qb.Name),\n    sku: clean(qb.Sku),\n    rate: num(qb.UnitPrice),\n    purchase_rate: qb.PurchaseCost === undefined ? undefined : num(qb.PurchaseCost),\n    description: clean(qb.Description || qb.FullyQualifiedName),\n    purchase_description: clean(qb.PurchaseDesc),\n    product_type: qb.Type === 'Service' ? 'service' : 'goods',\n    is_taxable: Boolean(qb.Taxable),\n    account_id: incomeAccountId,\n    purchase_account_id: purchaseAccountId,\n    inventory_account_id: inventoryAccountId,\n    custom_fields: customField(cfId, qb.Id)\n  });\n}\n\nfunction salesLines(config, maps, qb, entity) {\n  const result = [];\n  for (const line of qb.Line || []) {\n    if (line.DetailType === 'SubTotalLineDetail') continue;\n    if (line.DetailType !== 'SalesItemLineDetail') {\n      return { error: quarantine(entity, qb, 'UNSUPPORTED_SALES_LINE',\n        'Document contains a discount/group/description line that needs an explicit rule; no partial document was created.',\n        'Line.DetailType', line.DetailType, { source_line_id: clean(line.Id) }) };\n    }\n\n    const detail = line.SalesItemLineDetail || {};\n    const itemId = resolveId(maps, 'item_by_qbo_id', detail.ItemRef);\n    if (!itemId) {\n      return { error: quarantine(entity, qb, 'ITEM_UNMAPPED',\n        'A source line item is not mapped; the whole document is quarantined.',\n        'ItemRef', detail.ItemRef?.value, { source_line_id: clean(line.Id) }) };\n    }\n\n    const qbTaxCode = clean(detail.TaxCodeRef?.value);\n    const taxId = taxIdFor(config, detail.TaxCodeRef);\n    if (num(qb.TxnTaxDetail?.TotalTax) !== 0 && qbTaxCode && !taxId) {\n      return { error: quarantine(entity, qb, 'TAX_CODE_UNMAPPED',\n        'Tax-bearing document has an unmapped tax code.', 'TaxCodeRef', qbTaxCode,\n        { source_line_id: clean(line.Id) }) };\n    }\n\n    const quantity = detail.Qty === undefined ? 1 : num(detail.Qty);\n    const sourceLineAmount = round(line.Amount, 2);\n    const tolerance = num(config.amount_tolerance || 0.01);\n\n    if (quantity === 0 && Math.abs(sourceLineAmount) > tolerance) {\n      return { error: quarantine(entity, qb, 'INVALID_SALES_LINE_QUANTITY',\n        'QBO sales line has a non-zero amount but zero quantity.', 'SalesItemLineDetail.Qty', detail.Qty,\n        { source_line_id: clean(line.Id), source_line_amount: sourceLineAmount }) };\n    }\n\n    let rate = detail.UnitPrice === undefined\n      ? (quantity === 0 ? 0 : sourceLineAmount / quantity)\n      : num(detail.UnitPrice);\n    const calculatedAmount = round(quantity * rate, 2);\n    if (quantity !== 0 && Math.abs(calculatedAmount - sourceLineAmount) > tolerance) {\n      rate = round(sourceLineAmount / quantity, 6);\n    }\n\n    result.push(compact({\n      item_id: itemId,\n      description: clean(line.Description),\n      quantity,\n      rate,\n      tax_id: taxId,\n      item_order: line.LineNum === undefined ? result.length + 1 : num(line.LineNum)\n    }));\n  }\n  return { lines: result };\n}\n\nfunction buildInvoice(config, maps, qb) {\n  const customerId = resolveId(maps, 'customer_by_qbo_id', qb.CustomerRef);\n  if (!customerId) {\n    return quarantine('Invoice', qb, 'CUSTOMER_UNMAPPED', 'Invoice customer is not mapped.', 'CustomerRef', qb.CustomerRef?.value);\n  }\n\n  const built = salesLines(config, maps, qb, 'Invoice');\n  if (built.error) return built.error;\n  if (!built.lines.length) {\n    return quarantine('Invoice', qb, 'NO_POSTABLE_LINES', 'Invoice contains no supported sales lines.', 'Line', '');\n  }\n\n  const lineAmount = (qb.Line || [])\n    .filter((line) => line.DetailType === 'SalesItemLineDetail')\n    .reduce((sum, line) => sum + num(line.Amount), 0);\n  const sourceTax = num(qb.TxnTaxDetail?.TotalTax);\n  const difference = round(num(qb.TotalAmt) - lineAmount - sourceTax, 2);\n  const tolerance = num(config.amount_tolerance || 0.01);\n  if (Math.abs(difference) > tolerance) {\n    return quarantine('Invoice', qb, 'INVOICE_TOTAL_UNEXPLAINED',\n      'QBO total cannot be reproduced from supported lines and tax; likely discount/shipping/rounding data needs mapping.',\n      'TotalAmt', qb.TotalAmt, { computed_before_adjustment: round(lineAmount + sourceTax, 2), difference });\n  }\n\n  let invoiceNum = clean(qb.DocNumber) || `QB-${qb.Id}`;\n  if (clean(qb.Id) === '5450') invoiceNum = '32639-1';\n  if (clean(qb.Id) === '5451') invoiceNum = '32640-1';\n\n  const cfId = config.custom_field_ids?.invoice_qbo_id;\n  return ready(config, 'Invoice', qb, 'invoices', {\n    customer_id: customerId,\n    invoice_number: invoiceNum,\n    reference_number: sourceKey('Invoice', qb.Id),\n    date: clean(qb.TxnDate),\n    due_date: clean(qb.DueDate || qb.TxnDate),\n    exchange_rate: qb.ExchangeRate === undefined ? undefined : num(qb.ExchangeRate),\n    line_items: built.lines,\n    adjustment: difference === 0 ? undefined : difference,\n    adjustment_description: difference === 0 ? undefined : 'Verified QBO rounding difference',\n    notes: clean(qb.CustomerMemo?.value || qb.PrivateNote) || 'Migrated from QuickBooks',\n    custom_fields: customField(cfId, qb.Id)\n  });\n}\n\nfunction buildCustomerPayment(config, maps, qb) {\n  const key = sourceKey('Payment', qb.Id);\n  const existing = maps.existing_by_source_key?.[key];\n  if (existing) {\n    return {\n      json: {\n        outcome: 'skipped_existing',\n        source_entity: 'Payment',\n        source_id: clean(qb.Id),\n        source_key: key,\n        target_id: clean(existing)\n      }\n    };\n  }\n\n  if (num(qb.TotalAmt) === 0) {\n    return { json: { outcome: 'skipped_existing', source_entity: 'Payment', source_id: clean(qb.Id), note: 'Ignored zero-dollar QBO dummy payment' } };\n  }\n\n  const customerId = resolveId(maps, 'customer_by_qbo_id', qb.CustomerRef);\n  if (!customerId) {\n    return quarantine('Payment', qb, 'CUSTOMER_UNMAPPED', 'Payment customer is not mapped.', 'CustomerRef', qb.CustomerRef?.value);\n  }\n\n  const invoices = [];\n  for (const line of qb.Line || []) {\n    for (const linked of line.LinkedTxn || []) {\n      if (linked.TxnType !== 'Invoice') {\n        return quarantine('Payment', qb, 'UNSUPPORTED_PAYMENT_LINK',\n          'Payment links to a non-invoice transaction and needs an explicit credit/refund rule.', 'LinkedTxn.TxnType', linked.TxnType);\n      }\n      const invoiceId = resolveId(maps, 'invoice_by_qbo_id', linked.TxnId);\n      if (!invoiceId) {\n        return quarantine('Payment', qb, 'INVOICE_UNMAPPED',\n          'A payment allocation points to an invoice that is not mapped; the whole payment is quarantined.',\n          'LinkedTxn.TxnId', linked.TxnId);\n      }\n\n      const amountApplied = round(line.Amount, 2);\n      if (amountApplied <= 0) {\n        return quarantine('Payment', qb, 'INVALID_INVOICE_ALLOCATION_AMOUNT',\n          'Zoho requires every linked invoice allocation to have a positive amount.',\n          'Line.Amount', line.Amount, { linked_invoice_qbo_id: clean(linked.TxnId) });\n      }\n\n      invoices.push({ invoice_id: invoiceId, amount_applied: amountApplied });\n    }\n  }\n\n  const applied = round(invoices.reduce((sum, line) => sum + num(line.amount_applied), 0), 2);\n  const unapplied = round(qb.UnappliedAmt, 2);\n  const total = round(qb.TotalAmt, 2);\n  const tolerance = num(config.amount_tolerance || 0.01);\n\n  if (total <= 0) {\n    return quarantine('Payment', qb, 'ZERO_PAYMENT_NOT_POSTABLE',\n      'QuickBooks payment total is zero or negative; do not create it as a Zoho customer payment.',\n      'TotalAmt', qb.TotalAmt, { applied, unapplied, total });\n  }\n\n  if (invoices.length === 0) {\n    return quarantine('Payment', qb, 'NO_INVOICE_ALLOCATIONS',\n      'QuickBooks payment has no linked invoice. It must not be posted through the invoice-payment endpoint.',\n      'Line.LinkedTxn', '', { applied, unapplied, total });\n  }\n\n  if (Math.abs(applied + unapplied - total) > tolerance) {\n    return quarantine('Payment', qb, 'PAYMENT_TOTAL_MISMATCH',\n      'Applied plus unapplied amount does not equal QBO payment total.', 'TotalAmt', qb.TotalAmt,\n      { applied, unapplied, total });\n  }\n\n  const accountId = resolveId(maps, 'account_by_qbo_id', qb.DepositToAccountRef);\n  if (qb.DepositToAccountRef && !accountId) {\n    return quarantine('Payment', qb, 'DEPOSIT_ACCOUNT_UNMAPPED',\n      'Payment deposit account is not mapped.', 'DepositToAccountRef', qb.DepositToAccountRef?.value);\n  }\n\n  return ready(config, 'Payment', qb, 'customerpayments', {\n    customer_id: customerId,\n    payment_mode: paymentMode(qb),\n    amount: total,\n    date: clean(qb.TxnDate),\n    reference_number: key,\n    description: clean(qb.PrivateNote) || `Migrated from QuickBooks Payment ${qb.Id}`,\n    invoices,\n    exchange_rate: qb.ExchangeRate === undefined ? 1 : num(qb.ExchangeRate),\n    account_id: accountId\n  });\n}\n\nfunction purchaseLines(config, maps, qb, entity) {\n  const output = [];\n  for (const line of qb.Line || []) {\n    const lineAmount = round(line.Amount, 2);\n    if (lineAmount === 0) continue;\n\n    if (line.DetailType === 'AccountBasedExpenseLineDetail') {\n      const detail = line.AccountBasedExpenseLineDetail || {};\n      const accountId = resolveId(maps, 'account_by_qbo_id', detail.AccountRef);\n      if (!accountId) {\n        return { error: quarantine(entity, qb, 'EXPENSE_ACCOUNT_UNMAPPED',\n          'Expense line account is not mapped; the whole document is quarantined.',\n          'AccountRef', detail.AccountRef?.value, { source_line_id: clean(line.Id) }) };\n      }\n      const taxId = taxIdFor(config, detail.TaxCodeRef);\n      if (num(qb.TxnTaxDetail?.TotalTax) !== 0 && detail.TaxCodeRef && !taxId) {\n        return { error: quarantine(entity, qb, 'TAX_CODE_UNMAPPED',\n          'Tax-bearing expense line has an unmapped tax code.', 'TaxCodeRef', detail.TaxCodeRef?.value) };\n      }\n      output.push(compact({\n        account_id: accountId,\n        description: clean(line.Description),\n        rate: lineAmount,\n        quantity: 1,\n        tax_id: taxId,\n        item_order: output.length + 1\n      }));\n      continue;\n    }\n\n    if (line.DetailType === 'ItemBasedExpenseLineDetail') {\n      const detail = line.ItemBasedExpenseLineDetail || {};\n      const itemId = resolveId(maps, 'item_by_qbo_id', detail.ItemRef);\n      if (!itemId) {\n        return { error: quarantine(entity, qb, 'ITEM_UNMAPPED',\n          'Purchase line item is not mapped; the whole document is quarantined.',\n          'ItemRef', detail.ItemRef?.value, { source_line_id: clean(line.Id) }) };\n      }\n      const taxId = taxIdFor(config, detail.TaxCodeRef);\n      if (num(qb.TxnTaxDetail?.TotalTax) !== 0 && detail.TaxCodeRef && !taxId) {\n        return { error: quarantine(entity, qb, 'TAX_CODE_UNMAPPED',\n          'Tax-bearing purchase line has an unmapped tax code.', 'TaxCodeRef', detail.TaxCodeRef?.value) };\n      }\n      const qty = detail.Qty === undefined ? 1 : num(detail.Qty);\n      const rate = detail.UnitPrice === undefined ? (qty === 0 ? lineAmount : round(lineAmount / qty, 2)) : num(detail.UnitPrice);\n      output.push(compact({\n        item_id: itemId,\n        description: clean(line.Description),\n        rate: rate,\n        quantity: qty,\n        tax_id: taxId,\n        item_order: output.length + 1\n      }));\n      continue;\n    }\n\n    return { error: quarantine(entity, qb, 'UNSUPPORTED_PURCHASE_LINE',\n      'Purchase document contains an unsupported line type; no partial document was created.',\n      'Line.DetailType', line.DetailType, { source_line_id: clean(line.Id) }) };\n  }\n  return { lines: output };\n}\n\nfunction buildBill(config, maps, qb) {\n  const vendorId = resolveId(maps, 'vendor_by_qbo_id', qb.VendorRef);\n  if (!vendorId) {\n    return quarantine('Bill', qb, 'VENDOR_UNMAPPED', 'Bill vendor is not mapped.', 'VendorRef', qb.VendorRef?.value);\n  }\n  const built = purchaseLines(config, maps, qb, 'Bill');\n  if (built.error) return built.error;\n  if (!built.lines.length) return quarantine('Bill', qb, 'NO_POSTABLE_LINES', 'Bill has no supported lines.', 'Line', '');\n\n  const cfId = config.custom_field_ids?.bill_qbo_id;\n  return ready(config, 'Bill', qb, 'bills', {\n    vendor_id: vendorId,\n    bill_number: clean(qb.DocNumber) || `QB-${qb.Id}`,\n    reference_number: sourceKey('Bill', qb.Id),\n    date: clean(qb.TxnDate),\n    due_date: clean(qb.DueDate || qb.TxnDate),\n    exchange_rate: qb.ExchangeRate === undefined ? undefined : num(qb.ExchangeRate),\n    line_items: built.lines,\n    notes: clean(qb.PrivateNote) || 'Migrated from QuickBooks',\n    custom_fields: customField(cfId, qb.Id)\n  });\n}\n\nfunction buildVendorPayment(config, maps, qb) {\n  const initialTotal = round(qb.TotalAmt, 2);\n  const initialLines = Array.isArray(qb.Line) ? qb.Line : [];\n  if (Math.abs(initialTotal) <= num(config.amount_tolerance || 0.01) && initialLines.length === 0) {\n    return { json: {\n      outcome: 'skipped_zero_value',\n      source_entity: 'BillPayment',\n      source_id: clean(qb.Id),\n      source_doc_number: clean(qb.DocNumber),\n      source_key: sourceKey('BillPayment', qb.Id),\n      skip_reason: 'Zero-value transaction with no allocations; no accounting impact.'\n    }};\n  }\n  const vendorId = resolveId(maps, 'vendor_by_qbo_id', qb.VendorRef);\n  if (!vendorId) {\n    return quarantine('BillPayment', qb, 'VENDOR_UNMAPPED', 'Bill payment vendor is not mapped.', 'VendorRef', qb.VendorRef?.value);\n  }\n\n  const bills = [];\n  for (const line of qb.Line || []) {\n    for (const linked of line.LinkedTxn || []) {\n      if (linked.TxnType !== 'Bill') {\n        return quarantine('BillPayment', qb, 'UNSUPPORTED_BILL_PAYMENT_LINK',\n          'Bill payment links to a non-bill transaction and needs a credit rule.', 'LinkedTxn.TxnType', linked.TxnType);\n      }\n      const billId = resolveId(maps, 'bill_by_qbo_id', linked.TxnId);\n      if (!billId) {\n        return quarantine('BillPayment', qb, 'BILL_UNMAPPED',\n          'A bill payment allocation points to a bill that is not mapped.', 'LinkedTxn.TxnId', linked.TxnId);\n      }\n      bills.push({ bill_id: billId, amount_applied: num(line.Amount) });\n    }\n  }\n\n  if (!bills.length) {\n  if (config.allow_unapplied_vendor_payments !== true) {\n    return quarantine(\n      'BillPayment',\n      qb,\n      'NO_BILL_ALLOCATIONS',\n      'Unapplied vendor payment requires allow_unapplied_vendor_payments=true.',\n      'Line',\n      ''\n    );\n  }\n\n  const paymentAccountRef =\n    qb.CheckPayment?.BankAccountRef ||\n    qb.CreditCardPayment?.CCAccountRef;\n\n  const paidThroughId = resolveId(\n    maps,\n    'account_by_qbo_id',\n    paymentAccountRef\n  );\n\n  if (!paidThroughId) {\n    return quarantine(\n      'BillPayment',\n      qb,\n      'PAID_THROUGH_ACCOUNT_UNMAPPED',\n      'Vendor advance bank/credit-card account is not mapped.',\n      'PaymentAccountRef',\n      paymentAccountRef?.value\n    );\n  }\n\n  const total = round(qb.TotalAmt, 2);\n\n  if (total <= 0) {\n    return quarantine(\n      'BillPayment',\n      qb,\n      'INVALID_VENDOR_ADVANCE_AMOUNT',\n      'Vendor advance amount must be greater than zero.',\n      'TotalAmt',\n      qb.TotalAmt\n    );\n  }\n\n  return ready(config, 'BillPayment', qb, 'vendorpayments', {\n    vendor_id: vendorId,\n    date: clean(qb.TxnDate),\n    exchange_rate:\n      qb.ExchangeRate === undefined ? 1 : num(qb.ExchangeRate),\n    amount: total,\n    paid_through_account_id: paidThroughId,\n    payment_mode: paymentMode(qb),\n    description:\n      clean(qb.PrivateNote) ||\n      `Migrated unapplied QuickBooks BillPayment ${qb.Id}`,\n    reference_number: sourceKey('BillPayment', qb.Id)\n  });\n}\n\n  const paymentAccountRef = qb.CheckPayment?.BankAccountRef || qb.CreditCardPayment?.CCAccountRef;\n  const paidThroughId = resolveId(maps, 'account_by_qbo_id', paymentAccountRef);\n  if (!paidThroughId) {\n    return quarantine('BillPayment', qb, 'PAID_THROUGH_ACCOUNT_UNMAPPED',\n      'Vendor payment bank/credit-card account is not mapped.', 'PaymentAccountRef', paymentAccountRef?.value);\n  }\n\n  const applied = round(bills.reduce((sum, line) => sum + num(line.amount_applied), 0), 2);\n  const total = round(qb.TotalAmt, 2);\n  if (Math.abs(applied - total) > num(config.amount_tolerance || 0.01)) {\n    return quarantine('BillPayment', qb, 'VENDOR_PAYMENT_TOTAL_MISMATCH',\n      'Applied bill amounts do not equal the QBO bill payment total.', 'TotalAmt', qb.TotalAmt, { applied, total });\n  }\n\n  return ready(config, 'BillPayment', qb, 'vendorpayments', {\n    vendor_id: vendorId,\n    bills,\n    date: clean(qb.TxnDate),\n    exchange_rate: qb.ExchangeRate === undefined ? 1 : num(qb.ExchangeRate),\n    amount: total,\n    paid_through_account_id: paidThroughId,\n    payment_mode: paymentMode(qb),\n    description: clean(qb.PrivateNote) || `Migrated from QuickBooks BillPayment ${qb.Id}`,\n    reference_number: sourceKey('BillPayment', qb.Id)\n  });\n}\n\nfunction buildExpense(config, maps, qb) {\n  const tolerance = num(config.amount_tolerance || 0.01);\n  const initialLines = Array.isArray(qb.Line) ? qb.Line : [];\n  const initialTotal = round(qb.TotalAmt, 2);\n  const hasNonZeroLine = initialLines.some(\n    line => Math.abs(round(line.Amount, 2)) > tolerance\n  );\n  if (Math.abs(initialTotal) <= tolerance && !hasNonZeroLine) {\n    return { json: {\n      outcome: 'skipped_zero_value',\n      source_entity: 'Purchase',\n      source_id: clean(qb.Id),\n      source_doc_number: clean(qb.DocNumber),\n      source_key: sourceKey('Purchase', qb.Id),\n      skip_reason: 'Zero-value purchase with no non-zero accounting lines.'\n    }};\n  }\n  const sourceQboAccountId = clean(qb.AccountRef?.value);\n  const paidThroughId = resolveId(maps, 'account_by_qbo_id', qb.AccountRef);\n\n  if (!paidThroughId) {\n    return quarantine('Purchase', qb, 'PAID_THROUGH_ACCOUNT_UNMAPPED',\n      'Purchase bank/credit-card account is not mapped.', 'AccountRef', sourceQboAccountId);\n  }\n\n  const sourceMeta = maps.account_meta_by_qbo_id?.[sourceQboAccountId] || {};\n  const sourceAccountType = clean(sourceMeta.zoho_account_type).toLowerCase();\n  const bankLikeTypes = new Set(['bank', 'cash', 'payment_clearing_account']);\n  const fundingAccountTypes = new Set([...bankLikeTypes, 'credit_card']);\n  const purchaseBalanceSheetTypes = new Set([\n    'other_current_asset', 'fixed_asset', 'other_asset', 'stock',\n    'non_current_asset', 'intangible_asset', 'deferred_tax_asset',\n    'capital_work_in_progress', 'intangible_assets_under_development',\n    'other_current_liability', 'long_term_liability',\n    'non_current_liability', 'other_liability', 'deferred_tax_liability',\n    'equity'\n  ]);\n\n  const nonZeroLines = (qb.Line || []).filter((line) => Math.abs(round(line.Amount, 2)) > tolerance);\n\n  // QBO exposes both ordinary credit-card charges and Credit Card Credits as\n  // Purchase entities. The structural discriminator is Purchase.Credit=true.\n  // Do not use memo/description keywords and do not infer a refund merely from\n  // PaymentType=CreditCard, because that would misclassify normal card expenses.\n  const qboCreditFlag = qb.Credit === true || clean(qb.Credit).toLowerCase() === 'true';\n  const qboPaymentType = clean(qb.PaymentType).toLowerCase();\n  const isCreditCardCredit =\n    qboCreditFlag &&\n    qboPaymentType === 'creditcard' &&\n    sourceAccountType === 'credit_card';\n\n  if (isCreditCardCredit) {\n    if (nonZeroLines.length !== 1) {\n      return quarantine('Purchase', qb, 'COMPLEX_CREDIT_CARD_REFUND',\n        'Credit-card refund has multiple non-zero category lines. Review manually instead of collapsing accounting lines.',\n        'Line', nonZeroLines.map((line) => clean(line.Id)).join(','),\n        { qbo_credit: true, qbo_payment_type: clean(qb.PaymentType) });\n    }\n\n    const refundLine = nonZeroLines[0];\n    if (refundLine.DetailType !== 'AccountBasedExpenseLineDetail') {\n      return quarantine('Purchase', qb, 'UNSUPPORTED_CREDIT_CARD_REFUND_LINE',\n        'Credit-card refund must contain one account-based expense line.',\n        'Line.DetailType', refundLine.DetailType,\n        { source_line_id: clean(refundLine.Id) });\n    }\n\n    const refundAccountRef = refundLine.AccountBasedExpenseLineDetail?.AccountRef;\n    const refundAccountQboId = clean(refundAccountRef?.value);\n    const refundAccountMeta = maps.account_meta_by_qbo_id?.[refundAccountQboId] || {};\n    const refundAccountType = clean(refundAccountMeta.zoho_account_type).toLowerCase();\n    const allowedRefundSourceTypes = new Set(['expense', 'other_expense', 'cost_of_goods_sold']);\n    if (!allowedRefundSourceTypes.has(refundAccountType)) {\n      return quarantine('Purchase', qb, 'CREDIT_CARD_REFUND_SOURCE_NOT_EXPENSE',\n        'Credit-card credit category must be an expense/COGS account; bank-funded card payments belong to credit_card_repayments.',\n        'Line.AccountRef', refundAccountQboId,\n        { source_line_id: clean(refundLine.Id), qbo_account_type: refundAccountType });\n    }\n\n    const refundFromAccountId = resolveId(maps, 'account_by_qbo_id', refundAccountRef);\n    if (!refundFromAccountId) {\n      return quarantine('Purchase', qb, 'CREDIT_CARD_REFUND_ACCOUNT_UNMAPPED',\n        'Credit-card refund expense account is not mapped.',\n        'Line.AccountRef', refundAccountQboId,\n        { source_line_id: clean(refundLine.Id) });\n    }\n\n    const lineAmount = Math.abs(round(refundLine.Amount, 2));\n    const total = Math.abs(round(qb.TotalAmt, 2));\n    if (total <= 0 || lineAmount <= 0 || Math.abs(lineAmount - total) > tolerance) {\n      return quarantine('Purchase', qb, 'CREDIT_CARD_REFUND_TOTAL_MISMATCH',\n        'Credit-card refund line amount does not match QuickBooks TotalAmt.',\n        'TotalAmt', qb.TotalAmt,\n        { source_line_amount: lineAmount, difference: round(total - lineAmount, 2) });\n    }\n\n    const result = ready(config, 'Purchase', qb, 'banktransactions', {\n      from_account_id: refundFromAccountId,\n      to_account_id: paidThroughId,\n      transaction_type: 'refund',\n      amount: total,\n      date: clean(qb.TxnDate),\n      payment_mode: 'others',\n      reference_number: sourceKey('Purchase', qb.Id),\n      description: clean(qb.PrivateNote) || clean(refundLine.Description) ||\n        ('QuickBooks credit-card refund ' + clean(qb.Id))\n    });\n    result.json.migration_kind = 'credit_card_refund';\n    result.json.qbo_credit = true;\n    result.json.qbo_payment_type = clean(qb.PaymentType);\n    return result;\n  }\n\n  const cardTargetLines = nonZeroLines.filter((line) => {\n    if (line.DetailType !== 'AccountBasedExpenseLineDetail') return false;\n    const ref = line.AccountBasedExpenseLineDetail?.AccountRef;\n    const meta = maps.account_meta_by_qbo_id?.[clean(ref?.value)] || {};\n    return clean(meta.zoho_account_type).toLowerCase() === 'credit_card';\n  });\n\n  // In historical QBO files, a Pay-down-credit-card transaction can be exposed\n  // as a bank-paid Purchase whose sole account line is the credit-card liability.\n  if (bankLikeTypes.has(sourceAccountType) && cardTargetLines.length) {\n    if (nonZeroLines.length !== 1 || cardTargetLines.length !== 1) {\n      return quarantine('Purchase', qb, 'COMPLEX_CREDIT_CARD_REPAYMENT',\n        'Credit-card repayment contains multiple non-zero lines and must be reviewed before posting.',\n        'Line', cardTargetLines.map((line) => clean(line.Id)).join(','));\n    }\n\n    const cardLine = cardTargetLines[0];\n    const cardRef = cardLine.AccountBasedExpenseLineDetail?.AccountRef;\n    const creditCardId = resolveId(maps, 'account_by_qbo_id', cardRef);\n    const lineAmount = Math.abs(round(cardLine.Amount, 2));\n    const total = Math.abs(round(qb.TotalAmt, 2));\n\n    if (!creditCardId) {\n      return quarantine('Purchase', qb, 'CREDIT_CARD_ACCOUNT_UNMAPPED',\n        'Credit-card repayment destination account is not mapped.', 'Line.AccountRef', cardRef?.value,\n        { source_line_id: clean(cardLine.Id) });\n    }\n    if (paidThroughId === creditCardId) {\n      return quarantine('Purchase', qb, 'SAME_ACCOUNT_CARD_REPAYMENT',\n        'Credit-card repayment source and destination resolve to the same Zoho account.',\n        'AccountRef/Line.AccountRef', sourceQboAccountId,\n        { source_line_id: clean(cardLine.Id) });\n    }\n    if (total <= 0 || Math.abs(lineAmount - total) > tolerance) {\n      return quarantine('Purchase', qb, 'CARD_REPAYMENT_TOTAL_MISMATCH',\n        'Credit-card repayment line amount does not match QuickBooks TotalAmt.', 'TotalAmt', qb.TotalAmt,\n        { source_line_amount: lineAmount, difference: round(total - lineAmount, 2) });\n    }\n\n    const result = ready(config, 'Purchase', qb, 'banktransactions', {\n      from_account_id: paidThroughId,\n      to_account_id: creditCardId,\n      transaction_type: 'card_payment',\n      amount: total,\n      date: clean(qb.TxnDate),\n      reference_number: sourceKey('Purchase', qb.Id),\n      description: clean(qb.PrivateNote) ||\n        ('QuickBooks credit-card repayment ' + clean(qb.Id))\n    });\n    result.json.migration_kind = 'credit_card_repayment';\n    result.json.qbo_payment_type = clean(qb.PaymentType);\n    return result;\n  }\n\n  // QBO checks written from a bank account to a loan/asset/equity account are\n  // balance-sheet transfers, even though the QBO API exposes them as Purchase.\n  const balanceSheetTargetLines = nonZeroLines.filter((line) => {\n    if (line.DetailType !== 'AccountBasedExpenseLineDetail') return false;\n    const ref = line.AccountBasedExpenseLineDetail?.AccountRef;\n    const meta = maps.account_meta_by_qbo_id?.[clean(ref?.value)] || {};\n    return purchaseBalanceSheetTypes.has(clean(meta.zoho_account_type).toLowerCase());\n  });\n\n  if (fundingAccountTypes.has(sourceAccountType) && balanceSheetTargetLines.length) {\n    if (balanceSheetTargetLines.length !== nonZeroLines.length) {\n      return quarantine('Purchase', qb, 'MIXED_LOAN_TRANSFER_LINES',\n        'Bank check contains both balance-sheet and expense lines; manual review is required.',\n        'Line', nonZeroLines.map((line) => clean(line.Id)).join(','));\n    }\n\n    const total = Math.abs(round(qb.TotalAmt, 2));\n    const destinationTotal = round(balanceSheetTargetLines.reduce(\n      (sum, line) => sum + Math.abs(round(line.Amount, 2)), 0), 2);\n    if (total <= 0 || Math.abs(destinationTotal - total) > tolerance) {\n      return quarantine('Purchase', qb, 'LOAN_TRANSFER_TOTAL_MISMATCH',\n        'Balance-sheet transfer lines do not match QuickBooks TotalAmt.', 'TotalAmt', qb.TotalAmt,\n        { destination_total: destinationTotal, difference: round(total - destinationTotal, 2) });\n    }\n\n    const journalLines = [];\n    for (const line of balanceSheetTargetLines) {\n      const ref = line.AccountBasedExpenseLineDetail?.AccountRef;\n      const destinationId = resolveId(maps, 'account_by_qbo_id', ref);\n      if (!destinationId) {\n        return quarantine('Purchase', qb, 'LOAN_ACCOUNT_UNMAPPED',\n          'Loan/balance-sheet destination account is not mapped.', 'Line.AccountRef', ref?.value,\n          { source_line_id: clean(line.Id) });\n      }\n      if (destinationId === paidThroughId) {\n        return quarantine('Purchase', qb, 'SAME_ACCOUNT_LOAN_TRANSFER',\n          'Loan transfer source and destination resolve to the same Zoho account.',\n          'AccountRef/Line.AccountRef', sourceQboAccountId,\n          { source_line_id: clean(line.Id) });\n      }\n      journalLines.push({\n        account_id: destinationId,\n        debit_or_credit: 'debit',\n        amount: Math.abs(round(line.Amount, 2)),\n        description: clean(line.Description) || clean(ref?.name) || 'Loan transfer destination'\n      });\n    }\n    journalLines.push({\n      account_id: paidThroughId,\n      debit_or_credit: 'credit',\n      amount: total,\n      description: clean(qb.AccountRef?.name) || 'Bank transfer source'\n    });\n\n    const result = ready(config, 'Purchase', qb, 'journals', {\n      journal_date: clean(qb.TxnDate),\n      reference_number: sourceKey('Purchase', qb.Id),\n      notes: clean(qb.PrivateNote) || ('QuickBooks bank check to loan/balance-sheet account ' + clean(qb.Id)),\n      status: 'published',\n      line_items: journalLines\n    });\n    result.json.migration_kind = 'loan_check_balance_sheet_transfer_journal';\n    result.json.qbo_payment_type = clean(qb.PaymentType);\n    return result;\n  }\n\n  const expenseLines = [];\n  for (const line of qb.Line || []) {\n    const lineAmount = round(line.Amount, 2);\n    if (lineAmount === 0) continue;\n    if (lineAmount < 0) {\n      const approvedIds = new Set(config.approved_negative_expense_netting_source_ids || []);\n      if (!approvedIds.has(clean(qb.Id))) {\n        return quarantine('Purchase', qb, 'NEGATIVE_EXPENSE_LINE',\n          'Negative purchase line requires reviewed netting approval.', 'Line.Amount', line.Amount,\n          { source_line_id: clean(line.Id) });\n      }\n    }\n\n    let detail;\n    let accountId = '';\n    if (line.DetailType === 'AccountBasedExpenseLineDetail') {\n      detail = line.AccountBasedExpenseLineDetail || {};\n      accountId = resolveId(maps, 'account_by_qbo_id', detail.AccountRef);\n      if (!accountId) {\n        return quarantine('Purchase', qb, 'EXPENSE_ACCOUNT_UNMAPPED',\n          'Expense line account is not mapped.', 'AccountRef', detail.AccountRef?.value,\n          { source_line_id: clean(line.Id) });\n      }\n    } else if (line.DetailType === 'ItemBasedExpenseLineDetail') {\n      detail = line.ItemBasedExpenseLineDetail || {};\n      accountId = resolveId(maps, 'account_by_qbo_id', detail.ItemAccountRef) ||\n        clean(config.approved_expense_item_account_overrides?.[clean(detail.ItemRef?.value)]);\n      if (!accountId) {\n        return quarantine('Purchase', qb, 'ITEM_EXPENSE_ACCOUNT_UNMAPPED',\n          'Item-based expense needs its Zoho expense account mapping.', 'ItemRef', detail.ItemRef?.value,\n          { source_line_id: clean(line.Id) });\n      }\n    } else {\n      return quarantine('Purchase', qb, 'UNSUPPORTED_PURCHASE_LINE',\n        'Expense contains an unsupported QBO line type.', 'Line.DetailType', line.DetailType,\n        { source_line_id: clean(line.Id) });\n    }\n\n    const taxId = taxIdFor(config, detail.TaxCodeRef);\n    if (num(qb.TxnTaxDetail?.TotalTax) !== 0 && detail.TaxCodeRef && !taxId) {\n      return quarantine('Purchase', qb, 'TAX_CODE_UNMAPPED',\n        'Tax-bearing expense line has an unmapped tax code.', 'TaxCodeRef', detail.TaxCodeRef?.value,\n        { source_line_id: clean(line.Id) });\n    }\n    expenseLines.push(compact({\n      account_id: accountId,\n      description: clean(line.Description).slice(0, 100),\n      amount: lineAmount,\n      tax_id: taxId,\n      item_order: expenseLines.length + 1\n    }));\n  }\n\n  const groupedExpenseLines = new Map();\n  for (const line of expenseLines) {\n    const key = [clean(line.account_id), clean(line.tax_id)].join('|');\n    const existing = groupedExpenseLines.get(key) || { ...line, amount: 0, description_parts: [] };\n    existing.amount = round(existing.amount + num(line.amount), 2);\n    if (clean(line.description)) existing.description_parts.push(clean(line.description));\n    groupedExpenseLines.set(key, existing);\n  }\n  const netExpenseLines = [...groupedExpenseLines.values()]\n    .map((line, index) => compact({\n      account_id: line.account_id,\n      amount: round(line.amount, 2),\n      tax_id: line.tax_id,\n      item_order: index + 1,\n      description: line.description_parts.join(' | ').slice(0, 100)\n    }))\n    .filter(line => Math.abs(num(line.amount)) > tolerance);\n  if (netExpenseLines.some(line => num(line.amount) <= 0)) {\n    return quarantine('Purchase', qb, 'NON_POSITIVE_NET_EXPENSE_LINE',\n      'Approved netting produced a zero or negative account total.', 'Line.Amount', '');\n  }\n  if (!netExpenseLines.length) {\n    return quarantine('Purchase', qb, 'NO_POSTABLE_LINES',\n      'Expense has no supported non-zero lines.', 'Line', '');\n  }\n  const total = round(qb.TotalAmt, 2);\n  if (total <= 0) {\n    return quarantine('Purchase', qb, 'INVALID_EXPENSE_TOTAL',\n      'A normal Zoho expense must have a positive total.', 'TotalAmt', qb.TotalAmt);\n  }\n\n  const entityType = clean(qb.EntityRef?.type).toLowerCase();\n  let vendorId;\n  let customerId;\n  if (entityType === 'vendor') {\n    vendorId = resolveId(maps, 'vendor_by_qbo_id', qb.EntityRef);\n    if (!vendorId) return quarantine('Purchase', qb, 'VENDOR_UNMAPPED',\n      'Expense vendor is not mapped.', 'EntityRef', qb.EntityRef?.value);\n  } else if (entityType === 'customer') {\n    customerId = resolveId(maps, 'customer_by_qbo_id', qb.EntityRef);\n    if (!customerId) return quarantine('Purchase', qb, 'CUSTOMER_UNMAPPED',\n      'Expense customer is not mapped.', 'EntityRef', qb.EntityRef?.value);\n  } else if (qb.EntityRef) {\n    return quarantine('Purchase', qb, 'UNSUPPORTED_EXPENSE_PAYEE',\n      'Employee or Other payee requires a separate Zoho mapping.', 'EntityRef.type', qb.EntityRef?.type);\n  }\n\n  return ready(config, 'Purchase', qb, 'expenses', {\n    account_id: netExpenseLines[0].account_id,\n    paid_through_account_id: paidThroughId,\n    date: clean(qb.TxnDate),\n    amount: total,\n    line_items: netExpenseLines,\n    reference_number: sourceKey('Purchase', qb.Id),\n    description: clean(qb.PrivateNote).slice(0, 500) || 'Migrated from QuickBooks',\n    vendor_id: vendorId,\n    customer_id: customerId,\n    exchange_rate: qb.ExchangeRate === undefined ? undefined : num(qb.ExchangeRate),\n    is_inclusive_tax: qb.GlobalTaxCalculation === 'TaxInclusive'\n  });\n}\n\nfunction buildTransfer(config, maps, qb) {\n  const fromQboId = clean(qb.FromAccountRef?.value);\n  const toQboId = clean(qb.ToAccountRef?.value);\n  const fromId = resolveId(maps, 'account_by_qbo_id', qb.FromAccountRef);\n  const toId = resolveId(maps, 'account_by_qbo_id', qb.ToAccountRef);\n\n  if (!fromId || !toId) {\n    return quarantine('Transfer', qb, 'TRANSFER_ACCOUNT_UNMAPPED',\n      'Transfer source or destination account is not mapped.',\n      !fromId ? 'FromAccountRef' : 'ToAccountRef',\n      !fromId ? fromQboId : toQboId);\n  }\n\n  if (fromId === toId) {\n    return quarantine('Transfer', qb, 'SAME_ACCOUNT_TRANSFER',\n      'QuickBooks transfer source and destination resolve to the same Zoho account.',\n      'FromAccountRef/ToAccountRef', fromQboId);\n  }\n\n  const fromMeta = maps.account_meta_by_qbo_id?.[fromQboId] || {};\n  const toMeta = maps.account_meta_by_qbo_id?.[toQboId] || {};\n  const fromType = clean(fromMeta.zoho_account_type).toLowerCase();\n  const toType = clean(toMeta.zoho_account_type).toLowerCase();\n  const bankLike = new Set(['bank', 'cash', 'payment_clearing_account']);\n  const bankOrCard = new Set([...bankLike, 'credit_card']);\n  const journalBalanceSheetTypes = new Set([\n    ...bankOrCard,\n    'other_current_asset', 'fixed_asset', 'other_asset', 'stock',\n    'non_current_asset', 'intangible_asset', 'deferred_tax_asset',\n    'capital_work_in_progress', 'intangible_assets_under_development',\n    'other_current_liability', 'long_term_liability',\n    'non_current_liability', 'other_liability', 'deferred_tax_liability',\n    'equity'\n  ]);\n\n  const total = Math.abs(round(qb.Amount, 2));\n  if (total <= 0) {\n    return quarantine('Transfer', qb, 'INVALID_TRANSFER_AMOUNT',\n      'Transfer amount must be positive.', 'Amount', qb.Amount);\n  }\n\n  // Zoho supports a direct card_payment for a bank/cash -> credit-card pair.\n  if (bankLike.has(fromType) && toType === 'credit_card') {\n    const result = ready(config, 'Transfer', qb, 'banktransactions', {\n      from_account_id: fromId,\n      to_account_id: toId,\n      transaction_type: 'card_payment',\n      amount: total,\n      date: clean(qb.TxnDate),\n      reference_number: sourceKey('Transfer', qb.Id),\n      description: clean(qb.PrivateNote) || 'Migrated QuickBooks credit-card repayment'\n    });\n    result.json.migration_kind = 'credit_card_repayment';\n    return result;\n  }\n\n  // Normal transfers between bank / cash / credit-card accounts can use the\n  // Zoho banktransactions endpoint directly.\n  if (bankOrCard.has(fromType) && bankOrCard.has(toType)) {\n    return ready(config, 'Transfer', qb, 'banktransactions', {\n      from_account_id: fromId,\n      to_account_id: toId,\n      transaction_type: 'transfer_fund',\n      amount: total,\n      date: clean(qb.TxnDate),\n      reference_number: sourceKey('Transfer', qb.Id),\n      description: clean(qb.PrivateNote) || 'Migrated from QuickBooks'\n    });\n  }\n\n  // Zoho banktransactions rejects bank -> loan/liability combinations. Preserve\n  // the exact QBO double entry through a manual journal instead:\n  // destination account DEBIT, source account CREDIT.\n  const oneSideIsBankOrCard = bankOrCard.has(fromType) || bankOrCard.has(toType);\n  const journalPairIsSafe = journalBalanceSheetTypes.has(fromType) &&\n    journalBalanceSheetTypes.has(toType) && oneSideIsBankOrCard;\n\n  if (!journalPairIsSafe) {\n    return quarantine('Transfer', qb, 'UNSUPPORTED_TRANSFER_ACCOUNT_PAIR',\n      'Transfer account pair cannot be posted safely as a Zoho bank transaction or balance-sheet journal.',\n      'FromAccountRef/ToAccountRef',\n      fromQboId + ':' + fromType + ' -> ' + toQboId + ':' + toType,\n      { from_zoho_account_id: fromId, to_zoho_account_id: toId });\n  }\n\n  let journalDate = clean(qb.TxnDate);\n  const offsetDays = Number(config.loan_transfer_date_offset_days || 0);\n  if (journalDate && Number.isInteger(offsetDays) && offsetDays !== 0) {\n    const parsed = new Date(journalDate + 'T00:00:00.000Z');\n    if (!Number.isNaN(parsed.getTime())) {\n      parsed.setUTCDate(parsed.getUTCDate() + offsetDays);\n      journalDate = parsed.toISOString().slice(0, 10);\n    }\n  }\n\n  const result = ready(config, 'Transfer', qb, 'journals', {\n    journal_date: journalDate,\n    reference_number: sourceKey('Transfer', qb.Id),\n    status: 'published',\n    notes: clean(qb.PrivateNote) ||\n      ('Migrated QuickBooks Transfer ' + clean(qb.Id)),\n    line_items: [\n      {\n        account_id: toId,\n        debit_or_credit: 'debit',\n        amount: total,\n        description: clean(qb.ToAccountRef?.name) || 'Transfer destination'\n      },\n      {\n        account_id: fromId,\n        debit_or_credit: 'credit',\n        amount: total,\n        description: clean(qb.FromAccountRef?.name) || 'Transfer source'\n      }\n    ]\n  });\n  result.json.migration_kind = 'loan_balance_sheet_transfer_journal';\n  result.json.qbo_from_account_type = fromType;\n  result.json.qbo_to_account_type = toType;\n  return result;\n}\n\nfunction buildDeposit(config, maps, qb) {\n  const key = sourceKey('Deposit', qb.Id);\n\n  const existing = maps.existing_by_source_key?.[key];\n  if (existing) {\n    return {\n      json: {\n        outcome: 'skipped_existing',\n        source_entity: 'Deposit',\n        source_id: clean(qb.Id),\n        source_key: key,\n        target_id: clean(existing)\n      }\n    };\n  }\n\n  const toId = resolveId(\n    maps,\n    'account_by_qbo_id',\n    qb.DepositToAccountRef\n  );\n\n  if (!toId) {\n    return quarantine(\n      'Deposit',\n      qb,\n      'DEPOSIT_DESTINATION_UNMAPPED',\n      'QuickBooks deposit destination account is not mapped.',\n      'DepositToAccountRef',\n      qb.DepositToAccountRef?.value\n    );\n  }\n\n  const depositLines = (qb.Line || []).filter((line) => {\n    const linkedTransactions = line.LinkedTxn || [];\n\n    return (\n      line.DetailType === 'DepositLineDetail' ||\n      Boolean(line.DepositLineDetail) ||\n      linkedTransactions.some((txn) => txn.TxnType === 'Payment')\n    );\n  });\n\n  if (!depositLines.length) {\n    return quarantine(\n      'Deposit',\n      qb,\n      'NO_DEPOSIT_LINES',\n      'Deposit contains no usable account or linked-payment lines.',\n      'Line',\n      ''\n    );\n  }\n\n  const undepositedQboId = clean(\n    config.undeposited_funds_qbo_account_id || '59'\n  );\n\n  const undepositedZohoId = clean(\n    maps.account_by_qbo_id?.[undepositedQboId]\n  );\n\n  const resolvedLines = [];\n\n  for (let index = 0; index < depositLines.length; index++) {\n    const line = depositLines[index];\n    const detail = line.DepositLineDetail || {};\n    const linkedTransactions = line.LinkedTxn || [];\n\n    const linkedPayment = linkedTransactions.find(\n      (txn) => txn.TxnType === 'Payment'\n    );\n\n    let fromId = '';\n    let sourceType = '';\n    let sourceQboAccountId = '';\n\n    if (detail.AccountRef?.value) {\n      sourceQboAccountId = clean(detail.AccountRef.value);\n\n      fromId = resolveId(\n        maps,\n        'account_by_qbo_id',\n        detail.AccountRef\n      );\n\n      sourceType = 'account';\n    } else if (linkedPayment) {\n      fromId = undepositedZohoId;\n      sourceQboAccountId = undepositedQboId;\n      sourceType = 'linked_payment';\n    }\n\n    if (!fromId) {\n      return quarantine(\n        'Deposit',\n        qb,\n        linkedPayment\n          ? 'UNDEPOSITED_FUNDS_UNMAPPED'\n          : 'DEPOSIT_SOURCE_UNMAPPED',\n        linkedPayment\n          ? 'Linked customer payment deposit requires the Zoho Undeposited Funds account mapping.'\n          : 'Deposit source account is not mapped.',\n        linkedPayment\n          ? 'undeposited_funds_qbo_account_id'\n          : 'Line.DepositLineDetail.AccountRef',\n        linkedPayment\n          ? undepositedQboId\n          : detail.AccountRef?.value,\n        {\n          source_line_id: clean(line.Id),\n          linked_payment_qbo_id: clean(linkedPayment?.TxnId)\n        }\n      );\n    }\n\n    const amount = round(line.Amount, 2);\n\n    if (Math.abs(amount) <= 0) {\n      return quarantine(\n        'Deposit',\n        qb,\n        'INVALID_DEPOSIT_LINE_AMOUNT',\n        'Deposit line amount must be non-zero.',\n        'Line.Amount',\n        line.Amount,\n        {\n          source_line_id: clean(line.Id)\n        }\n      );\n    }\n\n    resolvedLines.push({\n      fromId,\n      sourceType,\n      sourceQboAccountId,\n      amount,\n      description:\n        clean(line.Description) ||\n        (\n          linkedPayment\n            ? `QBO Payment ${clean(linkedPayment.TxnId)} deposited`\n            : `QBO Deposit ${clean(qb.Id)}`\n        ),\n      linkedPaymentQboId: clean(linkedPayment?.TxnId)\n    });\n  }\n\n  const sourceTotal = round(\n    resolvedLines.reduce(\n      (sum, line) => sum + num(line.amount),\n      0\n    ),\n    2\n  );\n\n  const qboTotal = round(qb.TotalAmt, 2);\n  const tolerance = num(config.amount_tolerance || 0.01);\n\n  if (Math.abs(sourceTotal - qboTotal) > tolerance) {\n    return quarantine(\n      'Deposit',\n      qb,\n      'DEPOSIT_TOTAL_MISMATCH',\n      'Deposit line total does not match QuickBooks TotalAmt.',\n      'TotalAmt',\n      qb.TotalAmt,\n      {\n        calculated_line_total: sourceTotal,\n        difference: round(qboTotal - sourceTotal, 2)\n      }\n    );\n  }\n\n  if (resolvedLines.length === 1) {\n    const line = resolvedLines[0];\n\n    const sourceMeta =\n      maps.account_meta_by_qbo_id?.[\n        clean(line.sourceQboAccountId)\n      ] || {};\n\n    const destinationMeta =\n      maps.account_meta_by_qbo_id?.[\n        clean(qb.DepositToAccountRef?.value)\n      ] || {};\n\n    const sourceAccountType = clean(\n      sourceMeta.zoho_account_type\n    ).toLowerCase();\n\n    const destinationAccountType = clean(\n      destinationMeta.zoho_account_type\n    ).toLowerCase();\n\n    const expenseTypes = new Set([\n      'expense',\n      'other_expense',\n      'cost_of_goods_sold'\n    ]);\n\n    const bankLikeTypes = new Set([\n      'bank',\n      'cash',\n      'payment_clearing_account'\n    ]);\n\n    let transactionType = 'deposit';\n\n    if (line.sourceType === 'linked_payment') {\n      transactionType = 'transfer_fund';\n    } else if (expenseTypes.has(sourceAccountType)) {\n      // Zoho uses `refund` for Money In to a credit-card account.\n      // This debits/reduces the credit-card liability and credits the expense account.\n      transactionType =\n        destinationAccountType === 'credit_card'\n          ? 'refund'\n          : 'expense_refund';\n    } else if (bankLikeTypes.has(sourceAccountType)) {\n      transactionType =\n        destinationAccountType === 'credit_card'\n          ? 'card_payment'\n          : 'transfer_fund';\n    }\n\n    // Zoho banktransactions does not accept a credit-card -> bank deposit.\n    // Let that combination fall through to the balanced journal builder below.\n    const requiresJournal =\n      clean(qb.Id) === '225' ||\n      (\n        sourceAccountType === 'credit_card' &&\n        bankLikeTypes.has(destinationAccountType)\n      );\n\n    if (!requiresJournal) {\n      return ready(\n        config,\n        'Deposit',\n        qb,\n        'banktransactions',\n        {\n          from_account_id: line.fromId,\n          to_account_id: toId,\n          transaction_type: transactionType,\n          amount: Math.abs(qboTotal),\n          date: clean(qb.TxnDate),\n          payment_mode:\n            ['expense_refund', 'refund'].includes(transactionType)\n              ? 'others'\n              : undefined,\n          reference_number: key,\n          description:\n            clean(qb.PrivateNote) ||\n            (\n              line.sourceType === 'linked_payment'\n                ? `QBO linked payment ${line.linkedPaymentQboId}: Undeposited Funds transferred to bank`\n                : line.description\n            )\n        }\n      );\n    }\n  }\n\n  const journalLines = [];\n\n  journalLines.push({\n    account_id: toId,\n    debit_or_credit: qboTotal >= 0 ? 'debit' : 'credit',\n    amount: Math.abs(qboTotal),\n    description:\n      clean(qb.PrivateNote) ||\n      `QBO Deposit ${clean(qb.Id)} destination`\n  });\n\n  for (const line of resolvedLines) {\n    journalLines.push({\n      account_id: line.fromId,\n      debit_or_credit: line.amount >= 0 ? 'credit' : 'debit',\n      amount: Math.abs(line.amount),\n      description: line.description\n    });\n  }\n\n  const journalDebit = round(\n    journalLines\n      .filter((line) => line.debit_or_credit === 'debit')\n      .reduce((sum, line) => sum + num(line.amount), 0),\n    2\n  );\n\n  const journalCredit = round(\n    journalLines\n      .filter((line) => line.debit_or_credit === 'credit')\n      .reduce((sum, line) => sum + num(line.amount), 0),\n    2\n  );\n\n  if (Math.abs(journalDebit - journalCredit) > tolerance) {\n    return quarantine(\n      'Deposit',\n      qb,\n      'UNBALANCED_DEPOSIT_JOURNAL',\n      'Generated deposit journal debit and credit totals are different.',\n      'Line.Amount',\n      '',\n      {\n        debit: journalDebit,\n        credit: journalCredit\n      }\n    );\n  }\n\n  return ready(\n    config,\n    'Deposit',\n    qb,\n    'journals',\n    {\n      journal_date: clean(qb.TxnDate),\n      reference_number: key,\n      notes:\n        clean(qb.PrivateNote) ||\n        `Multi-line QuickBooks Deposit ${clean(qb.Id)}`,\n      line_items: journalLines\n    }\n  );\n}\n\nfunction buildJournal(config, maps, qb) {\n  const lines = [];\n  const descriptionNotes = [];\n\n  let debit = 0;\n  let credit = 0;\n\n  const tolerance = num(config.amount_tolerance || 0.01);\n\n  // Fallback contacts\n  const defaultCustomerId = clean(\n    config.default_migration_customer_id ||\n    Object.values(maps.customer_by_qbo_id || {})[0] ||\n    ''\n  );\n\n  const defaultVendorId = clean(\n    config.default_migration_vendor_id ||\n    Object.values(maps.vendor_by_qbo_id || {})[0] ||\n    ''\n  );\n\n  for (const line of qb.Line || []) {\n    if (line.DetailType === 'DescriptionOnly') {\n      const note = clean(line.Description);\n      if (note) descriptionNotes.push(note);\n      continue;\n    }\n\n    if (\n      line.DetailType !== 'JournalEntryLineDetail' &&\n      !line.JournalEntryLineDetail\n    ) {\n      return quarantine(\n        'JournalEntry',\n        qb,\n        'UNSUPPORTED_JOURNAL_LINE',\n        'Journal contains an unsupported non-accounting line.',\n        'Line.DetailType',\n        line.DetailType,\n        {\n          source_line_id: clean(line.Id)\n        }\n      );\n    }\n\n    const detail = line.JournalEntryLineDetail || {};\n\n    const accountId = resolveId(\n      maps,\n      'account_by_qbo_id',\n      detail.AccountRef\n    );\n\n    if (!accountId) {\n      return quarantine(\n        'JournalEntry',\n        qb,\n        'JOURNAL_ACCOUNT_UNMAPPED',\n        'Journal line account is not mapped.',\n        'AccountRef',\n        detail.AccountRef?.value,\n        {\n          source_line_id: clean(line.Id),\n          qbo_account_name: clean(detail.AccountRef?.name)\n        }\n      );\n    }\n\n    const side = clean(detail.PostingType).toLowerCase();\n    const amount = Math.abs(round(line.Amount, 2));\n\n    if (side !== 'debit' && side !== 'credit') {\n      return quarantine(\n        'JournalEntry',\n        qb,\n        'INVALID_POSTING_TYPE',\n        'Journal line posting type is not Debit or Credit.',\n        'PostingType',\n        detail.PostingType,\n        {\n          source_line_id: clean(line.Id)\n        }\n      );\n    }\n\n    if (amount <= tolerance) {\n      continue;\n    }\n\n    if (side === 'debit') {\n      debit += amount;\n    } else {\n      credit += amount;\n    }\n\n    // AR vs AP Check\n    const accountMeta = maps.account_meta_by_qbo_id?.[clean(detail.AccountRef?.value)] || {};\n    const accountType = clean(accountMeta.zoho_account_type).toLowerCase();\n\n    const isAr = accountType === 'accounts_receivable';\n    const isAp = accountType === 'accounts_payable';\n\n    const entityRef = detail.Entity?.EntityRef;\n    const entityType = clean(detail.Entity?.Type).toLowerCase();\n    let contactId;\n\n    if (isAr) {\n      contactId = resolveId(maps, 'customer_by_qbo_id', entityRef);\n      if (!contactId) {\n        return quarantine('JournalEntry', qb, 'AR_CUSTOMER_UNMAPPED',\n          'Accounts Receivable journal line requires the exact mapped QuickBooks customer.',\n          'JournalEntryLineDetail.Entity', entityRef?.value,\n          { source_line_id: clean(line.Id), entity_type: entityType });\n      }\n    } else if (isAp) {\n      contactId = resolveId(maps, 'vendor_by_qbo_id', entityRef);\n      if (!contactId) {\n        return quarantine('JournalEntry', qb, 'AP_VENDOR_UNMAPPED',\n          'Accounts Payable journal line requires the exact mapped QuickBooks vendor.',\n          'JournalEntryLineDetail.Entity', entityRef?.value,\n          { source_line_id: clean(line.Id), entity_type: entityType });\n      }\n    }\n\n    lines.push(compact({\n      account_id: accountId,\n      debit_or_credit: side,\n      amount,\n      description: clean(line.Description),\n      customer_id: contactId\n    }));\n  }\n\n  if (lines.length < 2) {\n    return quarantine(\n      'JournalEntry',\n      qb,\n      'NO_POSTABLE_JOURNAL_LINES',\n      'Journal does not contain at least two non-zero accounting lines.',\n      'Line',\n      ''\n    );\n  }\n\n  debit = round(debit, 2);\n  credit = round(credit, 2);\n\n  if (Math.abs(debit - credit) > tolerance) {\n    return quarantine(\n      'JournalEntry',\n      qb,\n      'UNBALANCED_JOURNAL',\n      'Journal debit and credit totals are not equal.',\n      'Line.Amount',\n      '',\n      {\n        debit,\n        credit,\n        difference: round(debit - credit, 2)\n      }\n    );\n  }\n\n  const notes = [\n    clean(qb.PrivateNote),\n    ...descriptionNotes\n  ].filter(Boolean).join(' | ');\n\n  return ready(\n    config,\n    'JournalEntry',\n    qb,\n    'journals',\n    {\n      journal_date: clean(qb.TxnDate),\n      reference_number: sourceKey('JournalEntry', qb.Id),\n      notes: notes || 'Migrated from QuickBooks',\n      line_items: lines\n    }\n  );\n}\n\n\nfunction buildCreditMemo(config, maps, qb) {\n  const linked = (qb.LinkedTxn || []).filter((txn) => txn.TxnType === 'Invoice');\n  if (linked.length) {\n    return quarantine('CreditMemo', qb, 'CREDIT_ALLOCATION_REQUIRES_TWO_STEP',\n      'Credit memo is linked to an invoice. Create the credit note first, then apply it with the Zoho credit-note invoices endpoint.',\n      'LinkedTxn', linked.map((txn) => txn.TxnId).join(','));\n  }\n  const customerId = resolveId(maps, 'customer_by_qbo_id', qb.CustomerRef);\n  if (!customerId) return quarantine('CreditMemo', qb, 'CUSTOMER_UNMAPPED',\n    'Credit memo customer is not mapped.', 'CustomerRef', qb.CustomerRef?.value);\n  const built = salesLines(config, maps, qb, 'CreditMemo');\n  if (built.error) return built.error;\n  if (!built.lines.length) return quarantine('CreditMemo', qb, 'NO_POSTABLE_LINES',\n    'Credit memo contains no supported lines.', 'Line', '');\n  return ready(config, 'CreditMemo', qb, 'creditnotes', {\n    customer_id: customerId,\n    creditnote_number: clean(qb.DocNumber) || ('QB-CM-' + qb.Id),\n    reference_number: sourceKey('CreditMemo', qb.Id),\n    date: clean(qb.TxnDate),\n    exchange_rate: qb.ExchangeRate === undefined ? undefined : num(qb.ExchangeRate),\n    line_items: built.lines,\n    notes: clean(qb.CustomerMemo?.value || qb.PrivateNote) || 'Migrated from QuickBooks'\n  });\n}\n\nfunction buildVendorCredit(config, maps, qb) {\n  const linked = (qb.LinkedTxn || []).filter((txn) => txn.TxnType === 'Bill');\n  if (linked.length) {\n    return quarantine('VendorCredit', qb, 'VENDOR_CREDIT_ALLOCATION_REQUIRES_TWO_STEP',\n      'Vendor credit is linked to a bill. Create the vendor credit first, then apply it with the Zoho vendor-credit bills endpoint.',\n      'LinkedTxn', linked.map((txn) => txn.TxnId).join(','));\n  }\n  const vendorId = resolveId(maps, 'vendor_by_qbo_id', qb.VendorRef);\n  if (!vendorId) return quarantine('VendorCredit', qb, 'VENDOR_UNMAPPED',\n    'Vendor credit vendor is not mapped.', 'VendorRef', qb.VendorRef?.value);\n  const built = purchaseLines(config, maps, qb, 'VendorCredit');\n  if (built.error) return built.error;\n  if (!built.lines.length) return quarantine('VendorCredit', qb, 'NO_POSTABLE_LINES',\n    'Vendor credit contains no supported lines.', 'Line', '');\n  return ready(config, 'VendorCredit', qb, 'vendorcredits', {\n    vendor_id: vendorId,\n    vendor_credit_number: clean(qb.DocNumber) || ('QB-VC-' + qb.Id),\n    reference_number: sourceKey('VendorCredit', qb.Id),\n    date: clean(qb.TxnDate),\n    exchange_rate: qb.ExchangeRate === undefined ? undefined : num(qb.ExchangeRate),\n    line_items: built.lines,\n    notes: clean(qb.PrivateNote) || 'Migrated from QuickBooks'\n  });\n}\n\nfunction buildSalesReceipt(config, maps, qb) {\n  const customerId = resolveId(maps, 'customer_by_qbo_id', qb.CustomerRef);\n  if (!customerId) return quarantine('SalesReceipt', qb, 'CUSTOMER_UNMAPPED',\n    'Sales receipt customer is not mapped.', 'CustomerRef', qb.CustomerRef?.value);\n  const depositQboId = clean(qb.DepositToAccountRef?.value);\n  const undepositedQboId = clean(config.undeposited_funds_qbo_account_id || '');\n  if (depositQboId && undepositedQboId && depositQboId !== undepositedQboId) {\n    return quarantine('SalesReceipt', qb, 'SALES_RECEIPT_DEPOSIT_REQUIRES_TWO_STEP',\n      'Zoho sales-receipt create API does not accept a deposit-account ID. Direct-to-bank QBO receipt needs a reviewed follow-up bank transfer.',\n      'DepositToAccountRef', depositQboId);\n  }\n  const built = salesLines(config, maps, qb, 'SalesReceipt');\n  if (built.error) return built.error;\n  if (!built.lines.length) return quarantine('SalesReceipt', qb, 'NO_POSTABLE_LINES',\n    'Sales receipt contains no supported lines.', 'Line', '');\n  const key = sourceKey('SalesReceipt', qb.Id);\n  return ready(config, 'SalesReceipt', qb, 'salesreceipts', {\n    customer_id: customerId,\n    receipt_number: clean(qb.DocNumber) || ('QB-SR-' + qb.Id),\n    date: clean(qb.TxnDate),\n    payment_mode: paymentMode(qb),\n    line_items: built.lines,\n    notes: [key, clean(qb.CustomerMemo?.value || qb.PrivateNote)].filter(Boolean).join(' | ')\n  });\n}\n\nfunction buildRefundReceipt(config, maps, qb) {\n  return quarantine('RefundReceipt', qb, 'REFUND_RECEIPT_REQUIRES_TWO_STEP',\n    'QBO RefundReceipt must be represented by a Zoho credit note plus a credit-note refund. A single create call would change the ledger incorrectly.',\n    'source_entity', 'RefundReceipt');\n}\n\nfunction sourceOwnerPhase(entity, maps, qb) {\n  const metaFor = (ref) => maps.account_meta_by_qbo_id?.[clean(ref?.value)] || {};\n  const typeFor = (ref) => clean(metaFor(ref).zoho_account_type).toLowerCase();\n  const bankLike = new Set(['bank', 'cash', 'payment_clearing_account']);\n  const fundingTypes = new Set([...bankLike, 'credit_card']);\n  const balanceSheet = new Set([\n    'bank', 'cash', 'payment_clearing_account', 'credit_card',\n    'accounts_receivable', 'accounts_payable',\n    'other_current_asset', 'fixed_asset', 'other_asset', 'stock',\n    'non_current_asset', 'intangible_asset', 'deferred_tax_asset',\n    'capital_work_in_progress', 'intangible_assets_under_development',\n    'other_current_liability', 'long_term_liability',\n    'non_current_liability', 'other_liability', 'deferred_tax_liability',\n    'equity'\n  ]);\n  const expenseTypes = new Set(['expense', 'other_expense', 'cost_of_goods_sold']);\n\n  const direct = {\n    Account: 'accounts', Customer: 'customers', Vendor: 'vendors', Item: 'items',\n    Invoice: 'invoices', Payment: 'invoice_payments', Bill: 'bills',\n    BillPayment: 'bill_payments', JournalEntry: 'journals'\n  };\n  if (direct[entity]) return direct[entity];\n\n  if (entity === 'Purchase') {\n    const sourceType = typeFor(qb.AccountRef);\n    const qboCreditFlag = qb.Credit === true || clean(qb.Credit).toLowerCase() === 'true';\n    const qboPaymentType = clean(qb.PaymentType).toLowerCase();\n\n    // Credit Card Credit is a Purchase with Credit=true. Its AccountRef is the\n    // credit-card account itself, so no bank account participates in the refund.\n    if (qboCreditFlag && qboPaymentType === 'creditcard' && sourceType === 'credit_card') {\n      return 'expense_refunds';\n    }\n\n    const targetTypes = (qb.Line || [])\n      .filter((line) => Math.abs(num(line.Amount)) > num((qb.config || {}).amount_tolerance || 0.01))\n      .map((line) => {\n        if (line.DetailType === 'AccountBasedExpenseLineDetail') {\n          return typeFor(line.AccountBasedExpenseLineDetail?.AccountRef);\n        }\n        if (line.DetailType === 'ItemBasedExpenseLineDetail') return 'item_expense';\n        return 'unsupported';\n      });\n    if (bankLike.has(sourceType) && targetTypes.includes('credit_card')) {\n      return 'credit_card_repayments';\n    }\n    if (fundingTypes.has(sourceType) && targetTypes.some((type) =>\n      balanceSheet.has(type) && type !== sourceType && !bankLike.has(type))) {\n      return 'bank_transactions';\n    }\n    return 'expenses';\n  }\n\n  if (entity === 'Transfer') {\n    const fromType = typeFor(qb.FromAccountRef);\n    const toType = typeFor(qb.ToAccountRef);\n    if (bankLike.has(fromType) && toType === 'credit_card') return 'credit_card_repayments';\n    return 'bank_transactions';\n  }\n\n  if (entity === 'Deposit') {\n    const destinationType = typeFor(qb.DepositToAccountRef);\n    const nonZero = (qb.Line || []).filter((line) => Math.abs(num(line.Amount)) > 0);\n    const hasLinkedPayment = nonZero.some((line) =>\n      (line.LinkedTxn || []).some((txn) => txn.TxnType === 'Payment'));\n    const sourceTypes = nonZero.map((line) => typeFor(line.DepositLineDetail?.AccountRef)).filter(Boolean);\n    if (!hasLinkedPayment && sourceTypes.length === 1 && expenseTypes.has(sourceTypes[0])) {\n      return 'expense_refunds';\n    }\n    if (!hasLinkedPayment && sourceTypes.length === 1 && bankLike.has(sourceTypes[0]) && destinationType === 'credit_card') {\n      return 'credit_card_repayments';\n    }\n    return 'bank_transactions';\n  }\n\n  return 'unsupported';\n}\n\nconst builders = {\n  Account: buildAccount,\n  Customer: (config, maps, qb) => buildContact(config, maps, qb, 'Customer'),\n  Vendor: (config, maps, qb) => buildContact(config, maps, qb, 'Vendor'),\n  Item: buildItem,\n  Invoice: buildInvoice,\n  Payment: buildCustomerPayment,\n  Bill: buildBill,\n  BillPayment: buildVendorPayment,\n  Purchase: buildExpense,\n  Transfer: buildTransfer,\n  Deposit: buildDeposit,\n  JournalEntry: buildJournal,\n  CreditMemo: buildCreditMemo,\n  VendorCredit: buildVendorCredit,\n  SalesReceipt: buildSalesReceipt,\n  RefundReceipt: buildRefundReceipt\n};\n\nconst output = [];\nfor (const item of input) {\n  const { config = {}, maps = {}, source_entity: entity, source: qb = {} } = item.json;\n  if (!clean(config.zoho_organization_id)) {\n    output.push(quarantine(entity || 'Unknown', qb, 'ZOHO_ORG_ID_MISSING',\n      'A single target Zoho organisation ID is required.', 'zoho_organization_id', ''));\n    continue;\n  }\n  if (!clean(qb.Id)) {\n    output.push(quarantine(entity || 'Unknown', qb, 'QBO_ID_MISSING',\n      'Source entity has no QuickBooks ID.', 'Id', ''));\n    continue;\n  }\n  // Purchase 3483 contains both expense and balance-sheet lines.\n  // Do not migrate it as a bank transaction; handle it later as a manual journal.\n  const deferredJournalPurchaseIds = new Set([\n    '3483',\n  ]);\n\n  if (\n    clean(config.phase) === 'bank_transactions' &&\n    entity === 'Purchase' &&\n    deferredJournalPurchaseIds.has(clean(qb.Id))\n  ) {\n    output.push({\n      json: {\n        outcome: 'skipped_other_phase',\n        source_entity: entity,\n        source_id: clean(qb.Id),\n        source_doc_number: clean(qb.DocNumber),\n        source_key: sourceKey(entity, qb.Id),\n        owner_phase: 'journals',\n        current_phase: clean(config.phase),\n        skip_reason: 'Mixed expense and balance-sheet purchase deferred for manual journal entry.',\n      },\n    });\n    continue;\n  }\n\n  const ownerPhase = sourceOwnerPhase(entity, maps, qb);\n  if (config.strict_phase_ownership === true && ownerPhase !== config.phase) {\n    output.push({ json: {\n      outcome: 'skipped_other_phase',\n      source_entity: entity,\n      source_id: clean(qb.Id),\n      source_doc_number: clean(qb.DocNumber),\n      source_key: sourceKey(entity, qb.Id),\n      owner_phase: ownerPhase,\n      current_phase: clean(config.phase)\n    }});\n    continue;\n  }\n  const existingTarget = clean(maps.existing_by_source_key?.[sourceKey(entity, qb.Id)]);\n  // Existing source references must be skipped before rebuilding. This prevents\n  // successful records from being treated as wrong-module repairs on reruns.\n  const classifyExistingBeforeSkip = false;\n  if (config.repair_existing_only !== false && existingTarget && !classifyExistingBeforeSkip) {\n    output.push({ json: {\n      outcome: 'skipped_existing', source_entity: entity, source_id: clean(qb.Id),\n      source_doc_number: clean(qb.DocNumber), source_key: sourceKey(entity, qb.Id),\n      target_id: existingTarget\n    }});\n    continue;\n  }\n  const builder = builders[entity];\n  if (!builder) {\n    output.push(quarantine(entity || 'Unknown', qb, 'UNSUPPORTED_ENTITY_NEEDS_MODULE_TRANSFORMER',\n      'This source entity requires an explicit, reviewed Zoho module transformer.', 'source_entity', entity));\n    continue;\n  }\n  try {\n    const built = builder(config, maps, qb);\n    if (config.repair_existing_only !== false && existingTarget && built?.json?.outcome === 'ready') {\n      const key = sourceKey(entity, qb.Id);\n      const intendedModule = clean(built.json.endpoint).split('/').filter(Boolean).at(-1) || '';\n      const currentModule = clean(maps.existing_module_by_source_key?.[key]);\n      if (currentModule && intendedModule && currentModule !== intendedModule) {\n        output.push(quarantine(entity, qb, 'EXISTING_SOURCE_KEY_WRONG_MODULE',\n          'This QuickBooks transaction already exists in a different Zoho module. Review and remove/void the wrong target before repair.',\n          'source_key', key, {\n            target_id: existingTarget,\n            existing_zoho_module: currentModule,\n            intended_zoho_module: intendedModule,\n            migration_kind: built.json.migration_kind || ''\n          }));\n      } else {\n        output.push({ json: {\n          outcome: 'skipped_existing', source_entity: entity, source_id: clean(qb.Id),\n          source_doc_number: clean(qb.DocNumber), source_key: key,\n          target_id: existingTarget, target_module: currentModule || intendedModule\n        }});\n      }\n    } else {\n      output.push(built);\n    }\n  } catch (error) {\n    output.push(quarantine(entity, qb, 'TRANSFORM_EXCEPTION', error.message || String(error), '', ''));\n  }\n}\n\nreturn output;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4400,
+        -176
+      ],
+      "id": "8c3bc75c-f58b-4151-8272-e5e003c7dc41",
+      "name": "Strict Payload Builder4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ready",
+              "leftValue": "={{ $json.outcome }}",
+              "rightValue": "ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -4176,
+        -176
+      ],
+      "id": "edef5802-9035-44ce-9e9a-d1814b868b1d",
+      "name": "Ready for Zoho?4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dry",
+              "leftValue": "={{ $('Attach Strict ID Maps4').first().json.config.dry_run }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -3728,
+        -272
+      ],
+      "id": "acdc73f7-5bcf-4f47-b692-346d0ae76102",
+      "name": "Dry Run?4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const all = $('Strict Payload Builder4').all().map(i => i.json);\nconst config = $('Validate Config4').first().json;\nconst counts = all.reduce((a, r) => { a[r.outcome] = (a[r.outcome] || 0) + 1; return a; }, {});\nconst quarantined = all.filter(r => r.outcome === 'quarantine');\nconst ready = all.filter(r => r.outcome === 'ready');\nconst maxLive = Math.max(1, Number(config.max_live_records_per_run || 700));\nconst quotaBlocked = !config.dry_run && ready.length > maxLive;\nconst strictBlocked = Boolean(config.stop_on_any_unmapped_value && quarantined.length > 0);\nreturn [{ json: {\n  run_mode: config.dry_run ? 'dry_run' : ((strictBlocked || quotaBlocked) ? 'live_blocked' : 'live'),\n  phase: config.phase,\n  counts,\n  ready_count: ready.length,\n  max_live_records_per_run: maxLive,\n  quota_blocked: quotaBlocked,\n  can_go_live: quarantined.length === 0 && ready.length <= maxLive,\n  live_blocked: strictBlocked || quotaBlocked,\n  next_action: quarantined.length ? 'Fix quarantines.' : (ready.length > maxLive ? 'Reduce date range so ready_count is within max_live_records_per_run.' : 'Safe to set dry_run=false.'),\n  quarantine_sample: quarantined.slice(0, 50),\n  ready_sample: ready.slice(0, 20).map(r => ({ source_key: r.source_key, endpoint: r.endpoint, migration_kind: r.migration_kind || '' }))\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3504,
+        -368
+      ],
+      "id": "086b973a-a637-400d-9e7b-4d2cde11dbe9",
+      "name": "Dry Run Summary4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.endpoint }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "organization_id",
+              "value": "={{ $json.organization_id }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.payload }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3280,
+        -368
+      ],
+      "id": "ce731f54-590b-4158-8131-0ec3fc796ff4",
+      "name": "Zoho - Create Strict Payload4",
+      "credentials": {
+        "oAuth2Api": {
+          "id": "4S6a9PViGwpYSjQB",
+          "name": "QB - ZB"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputs = $input.all();\nconst clean = (value) => String(value ?? '').trim();\nconst idKeys = [\n  'account_id', 'contact_id', 'item_id', 'invoice_id', 'payment_id', 'bill_id',\n  'vendorpayment_id', 'vendor_payment_id', 'expense_id', 'bank_transaction_id',\n  'transaction_id', 'journal_id', 'creditnote_id', 'vendor_credit_id', 'sales_receipt_id'\n];\nconst findTargetId = (value) => {\n  if (!value || typeof value !== 'object') return '';\n  for (const key of idKeys) if (clean(value[key])) return clean(value[key]);\n  for (const child of Object.values(value)) {\n    if (child && typeof child === 'object') {\n      const found = findTargetId(child);\n      if (found) return found;\n    }\n  }\n  return '';\n};\n\nreturn inputs.map((item) => {\n  const wrapper = item.json || {};\n  const body = wrapper.body || wrapper;\n  let request = {};\n  try { request = $('Zoho Write Rate Limit Loop5').item.json || {}; } catch (_) {}\n  const code = body.code === undefined ? null : Number(body.code);\n  const statusCode = Number(wrapper.statusCode || 0);\n  const ok = code === 0 || (code === null && statusCode >= 200 && statusCode < 300);\n  return { json: {\n    run_id: $execution.id,\n    phase: clean(request.config?.phase || request.phase || $('Validate Config4').first().json.phase),\n    source_entity: clean(request.source_entity),\n    source_id: clean(request.source_id),\n    source_doc_number: clean(request.source_doc_number),\n    source_key: clean(request.source_key),\n    target_module: clean(request.endpoint).split('/').filter(Boolean).at(-1) || '',\n    target_id: findTargetId(body),\n    outcome: ok ? 'created' : 'failed',\n    error_code: ok ? '' : clean(body.code ?? wrapper.statusCode ?? 'HTTP_ERROR'),\n    error_message: ok ? '' : clean(body.message || body.error?.message || wrapper.error || 'Zoho returned an unknown response'),\n    raw_response: JSON.stringify(body),\n    occurred_at: new Date().toISOString()\n  }};\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3056,
+        -368
+      ],
+      "id": "fd47ee35-0abe-4485-9918-dd6d83ae1ab6",
+      "name": "Normalize Zoho Result4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const all = $('Strict Payload Builder4').all().map(i => i.json);\nconst config = $('Validate Config4').first().json;\nconst counts = all.reduce((acc, row) => {\n  const key = row.outcome || 'unknown';\n  acc[key] = (acc[key] || 0) + 1;\n  return acc;\n}, {});\nconst quarantined = all.filter(row => row.outcome === 'quarantine');\nconst creditCardRepayments = all.filter(row => row.migration_kind === 'credit_card_repayment');\nconst blockedByStrictMode = Boolean(config.stop_on_any_unmapped_value && quarantined.length);\nreturn [{ json: {\n  run_mode: config.dry_run ? 'dry_run' : (blockedByStrictMode ? 'live_blocked' : 'live'),\n  phase: config.phase,\n  counts,\n  can_go_live: quarantined.length === 0,\n  live_blocked: blockedByStrictMode,\n  credit_card_repayments_detected: creditCardRepayments.length,\n  credit_card_repayment_sample: creditCardRepayments.slice(0, 25).map(row => ({\n    source_entity: row.source_entity,\n    source_id: row.source_id,\n    source_key: row.source_key,\n    amount: row.payload?.amount,\n    date: row.payload?.date,\n    from_account_id: row.payload?.from_account_id,\n    to_account_id: row.payload?.to_account_id\n  })),\n  next_action: quarantined.length ? 'Fix every quarantine, then run dry_run again.' : (config.dry_run ? 'Set dry_run=false and run from Manual Trigger.' : 'Live migration completed.'),\n  quarantine_sample: quarantined.slice(0, 50)\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3952,
+        -80
+      ],
+      "id": "fe1013b1-fbc0-402f-b77e-f3371c5dd39e",
+      "name": "Quarantine Summary4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.qbo_basic_authorization }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $json.qbo_refresh_token }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -5968,
+        -352
+      ],
+      "id": "662c6c90-0d9e-4497-b6ed-a6607fddcad4",
+      "name": "QBO - Refresh Access Token9"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $json.body || $json;\nif (!response.access_token) {\n  throw new Error('QuickBooks token refresh failed: ' + JSON.stringify(response));\n}\n\nconst sourceConfig = $('Validate Config4').first().json;\nreturn [{\n  json: {\n    ...sourceConfig,\n    qbo_access_token: response.access_token,\n    qbo_refresh_token_next: response.refresh_token || ''\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5744,
+        -352
+      ],
+      "id": "0e2a9b48-ce4c-4e7f-9ad6-3dc8a12eb927",
+      "name": "Prepare QBO Session5"
+    },
+    {
+      "parameters": {
+        "jsCode": "const clientId = String($json.qbo_client_id || '').trim();\nconst clientSecret = String($json.qbo_client_secret || '').trim();\nconst refreshToken = String($json.qbo_refresh_token || '').trim();\n\nif (!clientId || !clientSecret || !refreshToken) {\n  throw new Error('QuickBooks Client ID, Client Secret and Refresh Token are required.');\n}\n\nconst qboBasicAuthorization = 'Basic ' + Buffer\n  .from(clientId + ':' + clientSecret, 'utf8')\n  .toString('base64');\n\nreturn [{\n  json: {\n    qbo_basic_authorization: qboBasicAuthorization,\n    qbo_refresh_token: refreshToken\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -6192,
+        -352
+      ],
+      "id": "e09f0de3-6e72-471a-abce-87b3786a7886",
+      "name": "Build QBO Basic Authorization7"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: {\n  phase: \"overall_audit\", // accounts | customers | vendors | items | invoices | invoice_payments | bills | bill_payments | expenses | expense_refunds | credit_card_repayments | bank_transactions | journals | overall_audit\n  phase_order: [\"accounts\",\"customers\",\"vendors\",\"items\",\"invoices\",\"invoice_payments\",\"bills\",\"bill_payments\",\"expenses\",\"expense_refunds\",\"credit_card_repayments\",\"bank_transactions\",\"journals\"],\n  account_depth: 0,\n  qbo_realm_id: \"193514701393924\",\n  qbo_client_id: \"ABBuVrJH88afec1McOdWyOYb1gfa2IYvZE1fQFUnj9k7B44L2f\",\n  qbo_client_secret: \"4ErIMnHTYBDjXyTb3XhrpTZ7XeY5ftAeQeNkpdYq\",\n  qbo_refresh_token: \"RT1-147-H0-1799905051w4327dh8obeppeuu61hz\",\n  zoho_organization_id: \"916881569\",\n  qbo_api_base: \"https://quickbooks.api.intuit.com/v3/company\",\n  zoho_api_base: \"https://www.zohoapis.com/books/v3\",\n  migration_mode: \"all\", // all | year | cutover\n  year: 2026,\n  start_date: \"2026-07-31\",\n  end_date: \"2026-10-31\",\n  cutover_date: \"2026-10-31\",\n  dry_run: true,\n  stop_on_any_unmapped_value: true,\n  repair_existing_only: true,\n  strict_phase_ownership: true,\n  zoho_write_delay_seconds: 1,\n  use_qualified_account_names: true,\n  undeposited_funds_qbo_account_id: \"59\",\n  amount_tolerance: 0.01,\n  approved_negative_expense_netting_source_ids: [\"4125\"],\n  max_live_records_per_run: 1000,\n  qbo_page_size: 1000,\n  zoho_page_size: 200,\n  custom_field_ids: {\n    account_qbo_id: \"8678101000000668859\",\n    contact_qbo_id: \"8678101000000668848\",\n    item_qbo_id: \"8678101000000668856\",\n    invoice_qbo_id: \"8678101000000668862\",\n    bill_qbo_id: \"8678101000000668860\"\n  },\n  tax_map: {},\n  approved_account_overrides: {\n    \"3\": \"8678101000000669227\",\n    \"4\": \"8678101000000669249\",\n    \"5\": \"8678101000000669245\",\n    \"6\": \"8678101000000669274\",\n    \"7\": \"8678101000000669306\",\n    \"8\": \"8678101000000669310\",\n    \"9\": \"8678101000000669314\",\n    \"10\": \"8678101000000669332\",\n    \"11\": \"8678101000000669348\",\n    \"12\": \"8678101000000669340\",\n    \"13\": \"8678101000000669369\",\n    \"14\": \"8678101000000669373\",\n    \"15\": \"8678101000000669377\",\n    \"16\": \"8678101000000669318\",\n    \"17\": \"8678101000000669391\",\n    \"18\": \"8678101000000669399\",\n    \"19\": \"8678101000000669431\",\n    \"20\": \"8678101000000669231\",\n    \"21\": \"8678101000000669362\",\n    \"22\": \"8678101000000669359\",\n    \"23\": \"8678101000000669414\",\n    \"24\": \"8678101000000669422\",\n    \"25\": \"8678101000000669418\",\n    \"26\": \"8678101000000669253\",\n    \"27\": \"8678101000000669352\",\n    \"28\": \"8678101000000669290\",\n    \"31\": \"8678101000000669435\",\n    \"32\": \"8678101000000000364\",\n    \"33\": \"8678101000000669411\",\n    \"35\": \"8678101000000669296\",\n    \"36\": \"8678101000000669395\",\n    \"37\": \"8678101000000669344\",\n    \"39\": \"8678101000000669365\",\n    \"40\": \"8678101000000669266\",\n    \"44\": \"8678101000000669326\",\n    \"45\": \"8678101000000000373\",\n    \"46\": \"8678101000000669381\",\n    \"47\": \"8678101000000669407\",\n    \"48\": \"8678101000000669403\",\n    \"50\": \"8678101000000669270\",\n    \"52\": \"8678101000000669322\",\n    \"53\": \"8678101000000669336\",\n    \"54\": \"8678101000000669425\",\n    \"55\": \"8678101000000669385\",\n    \"56\": \"8678101000000669278\",\n    \"57\": \"8678101000000669300\",\n    \"58\": \"8678101000000669355\",\n    \"60\": \"8678101000000669223\",\n    \"62\": \"8678101000000100003\",\n    \"63\": \"8678101000000669256\",\n    \"1150040000\": \"8678101000000669235\",\n    \"1150040001\": \"8678101000000669262\",\n    \"1150040002\": \"8678101000000669284\",\n    \"1150040003\": \"8678101000000669239\"\n  },\n  approved_item_overrides: {\n    \"1\": \"8678101000000671721\",\n    \"2\": \"8678101000000671713\",\n    \"3\": \"8678101000000671705\",\n    \"4\": \"8678101000000671689\",\n    \"5\": \"8678101000000671697\"\n  },\n  approved_customer_overrides: {\n    \"1\": \"8678101000000669729\",\n    \"19\": \"8678101000000669603\",\n    \"29\": \"8678101000000669666\",\n    \"31\": \"8678101000000669657\",\n    \"35\": \"8678101000000669693\",\n    \"36\": \"8678101000000669648\",\n    \"44\": \"8678101000000669621\",\n    \"50\": \"8678101000000669594\",\n    \"51\": \"8678101000000669630\",\n    \"52\": \"8678101000000669639\",\n    \"53\": \"8678101000000669675\",\n    \"55\": \"8678101000000669684\",\n    \"59\": \"8678101000000669702\",\n    \"60\": \"8678101000000669711\",\n    \"62\": \"8678101000000669720\",\n    \"114\": \"8678101000000669612\"\n  },\n  approved_vendor_overrides: {\n    \"2\": \"8678101000000670671\",\n    \"3\": \"8678101000000670716\",\n    \"4\": \"8678101000000670869\",\n    \"5\": \"8678101000000671004\",\n    \"6\": \"8678101000000670995\",\n    \"7\": \"8678101000000671112\",\n    \"8\": \"8678101000000671292\",\n    \"9\": \"8678101000000671337\",\n    \"10\": \"8678101000000671508\",\n    \"11\": \"8678101000000671553\",\n    \"13\": \"8678101000000670851\",\n    \"14\": \"8678101000000671256\",\n    \"15\": \"8678101000000671058\",\n    \"16\": \"8678101000000670689\",\n    \"17\": \"8678101000000671031\",\n    \"18\": \"8678101000000671148\",\n    \"20\": \"8678101000000671310\",\n    \"21\": \"8678101000000671499\",\n    \"22\": \"8678101000000671562\",\n    \"23\": \"8678101000000670932\",\n    \"24\": \"8678101000000670986\",\n    \"25\": \"8678101000000670752\",\n    \"26\": \"8678101000000671049\",\n    \"27\": \"8678101000000671427\",\n    \"28\": \"8678101000000671166\",\n    \"30\": \"8678101000000670896\",\n    \"32\": \"8678101000000670680\",\n    \"33\": \"8678101000000671319\",\n    \"34\": \"8678101000000670860\",\n    \"37\": \"8678101000000671409\",\n    \"38\": \"8678101000000671517\",\n    \"39\": \"8678101000000670977\",\n    \"40\": \"8678101000000671121\",\n    \"41\": \"8678101000000671580\",\n    \"42\": \"8678101000000670734\",\n    \"43\": \"8678101000000671013\",\n    \"45\": \"8678101000000671103\",\n    \"46\": \"8678101000000670842\",\n    \"47\": \"8678101000000670887\",\n    \"48\": \"8678101000000671382\",\n    \"49\": \"8678101000000671220\",\n    \"54\": \"8678101000000671067\",\n    \"56\": \"8678101000000671490\",\n    \"57\": \"8678101000000670968\",\n    \"58\": \"8678101000000670941\",\n    \"61\": \"8678101000000671391\",\n    \"63\": \"8678101000000670743\",\n    \"64\": \"8678101000000670797\",\n    \"65\": \"8678101000000670824\",\n    \"66\": \"8678101000000671076\",\n    \"67\": \"8678101000000671436\",\n    \"68\": \"8678101000000671445\",\n    \"69\": \"8678101000000670833\",\n    \"70\": \"8678101000000671130\",\n    \"71\": \"8678101000000671346\",\n    \"72\": \"8678101000000671022\",\n    \"73\": \"8678101000000670878\",\n    \"74\": \"8678101000000671247\",\n    \"75\": \"8678101000000670806\",\n    \"76\": \"8678101000000671085\",\n    \"77\": \"8678101000000671283\",\n    \"78\": \"8678101000000671229\",\n    \"79\": \"8678101000000671418\",\n    \"80\": \"8678101000000670923\",\n    \"81\": \"8678101000000670950\",\n    \"82\": \"8678101000000671544\",\n    \"83\": \"8678101000000670707\",\n    \"84\": \"8678101000000670725\",\n    \"85\": \"8678101000000671400\",\n    \"86\": \"8678101000000670905\",\n    \"87\": \"8678101000000671463\",\n    \"88\": \"8678101000000670914\",\n    \"89\": \"8678101000000671211\",\n    \"90\": \"8678101000000671238\",\n    \"91\": \"8678101000000671328\",\n    \"92\": \"8678101000000670959\",\n    \"93\": \"8678101000000671184\",\n    \"94\": \"8678101000000671193\",\n    \"95\": \"8678101000000670788\",\n    \"96\": \"8678101000000671472\",\n    \"97\": \"8678101000000671373\",\n    \"98\": \"8678101000000670770\",\n    \"99\": \"8678101000000671094\",\n    \"100\": \"8678101000000671274\",\n    \"101\": \"8678101000000671481\",\n    \"102\": \"8678101000000671265\",\n    \"103\": \"8678101000000671535\",\n    \"104\": \"8678101000000671355\",\n    \"105\": \"8678101000000671139\",\n    \"106\": \"8678101000000671301\",\n    \"107\": \"8678101000000671589\",\n    \"108\": \"8678101000000671571\",\n    \"109\": \"8678101000000671175\",\n    \"110\": \"8678101000000671040\",\n    \"111\": \"8678101000000670779\",\n    \"112\": \"8678101000000670761\",\n    \"113\": \"8678101000000670815\",\n    \"115\": \"8678101000000671202\",\n    \"116\": \"8678101000000671526\",\n    \"117\": \"8678101000000671157\",\n    \"118\": \"8678101000000671454\",\n    \"119\": \"8678101000000671364\",\n    \"200000001\": \"8678101000000670698\"\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -6864,
+        -160
+      ],
+      "id": "e21f0cca-d88a-4261-9277-f51f072141dd",
+      "name": "Config - EDIT THIS ONLY4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\nconst sourceRows = [];\nlet maps = {};\n\nfor (const item of inputItems) {\n  const json = item.json || {};\n  if (json.maps && Object.keys(json.maps).length) maps = json.maps;\n  if (Array.isArray(json.source_rows)) {\n    sourceRows.push(...json.source_rows);\n  } else if (json.source_entity && json.source) {\n    sourceRows.push(json);\n  }\n}\n\nconst clean = value => String(value ?? '').trim();\nconst supportedEntities = new Set([\n  'Account','Customer','Vendor','Item','Invoice','Payment','Bill','BillPayment',\n  'Purchase','Transfer','Deposit','JournalEntry','CreditMemo','VendorCredit',\n  'SalesReceipt','RefundReceipt'\n]);\nconst existingBySourceKey = maps.existing_by_source_key || {};\nconst summary = {};\nconst missing = [];\nconst seen = new Set();\n\nfor (const row of sourceRows) {\n  const entity = clean(row.source_entity);\n  const source = row.source || {};\n  const sourceId = clean(source.Id);\n  if (!supportedEntities.has(entity) || !sourceId) continue;\n\n  const sourceKey = `QBO:${entity}:${sourceId}`;\n  if (seen.has(sourceKey)) continue;\n  seen.add(sourceKey);\n\n  if (!summary[entity]) {\n    summary[entity] = { qbo_count: 0, migrated_count: 0, missing_count: 0 };\n  }\n  summary[entity].qbo_count++;\n\n  const targetId = clean(existingBySourceKey[sourceKey]);\n  if (targetId) {\n    summary[entity].migrated_count++;\n    continue;\n  }\n\n  summary[entity].missing_count++;\n  missing.push({\n    source_entity: entity,\n    source_id: sourceId,\n    source_doc_number: clean(source.DocNumber),\n    source_key: sourceKey,\n    txn_date: clean(source.TxnDate || source.MetaData?.CreateTime),\n    amount: Number(source.TotalAmt ?? source.Amount ?? source.Balance ?? 0),\n    message: 'No matching QBO source reference was found in the Zoho snapshots.'\n  });\n}\n\nconst totals = Object.values(summary).reduce((acc, value) => {\n  acc.qbo += value.qbo_count;\n  acc.migrated += value.migrated_count;\n  acc.missing += value.missing_count;\n  return acc;\n}, { qbo: 0, migrated: 0, missing: 0 });\n\nreturn [\n  { json: {\n    audit_type: 'OVERALL_MIGRATION_SUMMARY',\n    audit_read_only: true,\n    total_qbo_records: totals.qbo,\n    total_migrated_records: totals.migrated,\n    total_missing_records: totals.missing,\n    migration_complete_by_reference: totals.missing === 0,\n    entity_summary: summary,\n    warning: 'Reference completeness does not prove ledger balances; reconcile Trial Balance separately.'\n  }},\n  ...missing.map((record, index) => ({ json: {\n    audit_type: 'MISSING_RECORD',\n    missing_row_number: index + 1,\n    ...record\n  }}))\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4304,
+        96
+      ],
+      "id": "8283521b-b96f-49c8-b5b1-ba1f7434d58f",
+      "name": "Overall Migration Audit4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const wanted = new Set([\n  'Account:30',\n  'Account:59',\n  'Purchase:4172',\n  'Purchase:4165',\n  'Purchase:2320',\n]);\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  const bundle = item.json || {};\n\n  const rows = Array.isArray(bundle.source_rows)\n    ? bundle.source_rows\n    : [bundle];\n\n  for (const row of rows) {\n    const entity = String(row.source_entity || '').trim();\n    const source = row.source || {};\n    const id = String(source.Id || '').trim();\n    const key = `${entity}:${id}`;\n\n    if (!wanted.has(key)) continue;\n\n    results.push({\n      json: {\n        inspect_key: key,\n        source_entity: entity,\n        source_id: id,\n        source,\n      },\n    });\n  }\n}\n\nif (!results.length) {\n  return [{\n    json: {\n      outcome: 'not_found',\n      message: 'Requested missing records were not present in the overall audit source rows.',\n    },\n  }];\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4416,
+        304
+      ],
+      "id": "9be75676-21f6-4b9b-b643-494e62f4aa0d",
+      "name": "Inspect Overall Missing Records3"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config - EDIT THIS ONLY4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Phase Snapshot Jobs3": {
+      "main": [
+        [
+          {
+            "node": "Zoho - Phase Snapshots3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zoho - Phase Snapshots3": {
+      "main": [
+        [
+          {
+            "node": "Wait for Source + Target Snapshots4",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Attach Run Mode3": {
+      "main": [
+        [
+          {
+            "node": "Dry Run?4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zoho Write Rate Limit Loop5": {
+      "main": [
+        [
+          {
+            "node": "Live Migration Summary5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Zoho - Create Strict Payload4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1 Second - Zoho Limit5": {
+      "main": [
+        [
+          {
+            "node": "Zoho Write Rate Limit Loop5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Config4": {
+      "main": [
+        [
+          {
+            "node": "Config Valid?4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config Valid?4": {
+      "main": [
+        [
+          {
+            "node": "Build QBO Basic Authorization7",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Phase Snapshot Jobs3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Config Error - STOP4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build QBO Jobs4": {
+      "main": [
+        [
+          {
+            "node": "QBO - Paginated Query4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QBO - Paginated Query4": {
+      "main": [
+        [
+          {
+            "node": "Flatten QBO Pages4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten QBO Pages4": {
+      "main": [
+        [
+          {
+            "node": "Wait for Source + Target Snapshots4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Source + Target Snapshots4": {
+      "main": [
+        [
+          {
+            "node": "Attach Strict ID Maps4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Strict ID Maps4": {
+      "main": [
+        [
+          {
+            "node": "Strict Payload Builder4",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Overall Migration Audit4",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Inspect Overall Missing Records3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Strict Payload Builder4": {
+      "main": [
+        [
+          {
+            "node": "Ready for Zoho?4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ready for Zoho?4": {
+      "main": [
+        [
+          {
+            "node": "Attach Run Mode3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Quarantine Summary4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dry Run?4": {
+      "main": [
+        [
+          {
+            "node": "Dry Run Summary4",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Zoho Write Rate Limit Loop5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zoho - Create Strict Payload4": {
+      "main": [
+        [
+          {
+            "node": "Normalize Zoho Result4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Zoho Result4": {
+      "main": [
+        [
+          {
+            "node": "Wait 1 Second - Zoho Limit5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QBO - Refresh Access Token9": {
+      "main": [
+        [
+          {
+            "node": "Prepare QBO Session5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare QBO Session5": {
+      "main": [
+        [
+          {
+            "node": "Build QBO Jobs4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build QBO Basic Authorization7": {
+      "main": [
+        [
+          {
+            "node": "QBO - Refresh Access Token9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config - EDIT THIS ONLY4": {
+      "main": [
+        [
+          {
+            "node": "Validate Config4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "2dc5bbf1-0e09-42a6-be0b-6edf9a62018a",
+  "meta": {
+    "instanceId": "2c31ff129e343fac3c88d4740cc09ecaa52b8305289c8bd600696d45dc7e4015"
+  },
+  "id": "AMiw58mPVw278OUJ",
+  "tags": []
+}
